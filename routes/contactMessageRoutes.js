@@ -1,10 +1,10 @@
-import express from 'express';
-import contactMessageController from '../controllers/contactMessageController.js';
+import express from "express";
+import { saveContact, getContacts } from "../controllers/contactMessageController.js";
 
 const router = express.Router();
 
-router.get('/', contactMessageController.getAllMessages);
-router.post('/', contactMessageController.createMessage);
-router.delete('/:id', contactMessageController.deleteMessage);
+router.post("/", saveContact);
 
-export default router; 
+router.get("/", getContacts);
+
+export default router;
