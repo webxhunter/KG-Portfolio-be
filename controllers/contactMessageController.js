@@ -44,7 +44,7 @@ export const saveContact = async (req, res) => {
         html: `
           <div style="font-family: Arial, sans-serif; max-width: 600px; margin: auto; border: 1px solid #ddd; border-radius: 8px; overflow: hidden;">
             <div style="background: #00aef0; color: white; text-align: center; padding: 15px; font-size: 18px; font-weight: bold;">
-              SENT YOU A MESSAGE
+              SENT MAAZ A MESSAGE
             </div>
             <div style="padding: 20px; background: #f9f9f9;">
               <p><strong>Name:</strong> ${first_name} ${last_name}</p>
