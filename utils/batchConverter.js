@@ -59,15 +59,16 @@ async function processRow(table, row, column) {
       return;
     }
 
+    console.log(`🎬 Starting conversion: ${fileName}`);
+
     const hlsPath = await convertToHls(inputPath, outputDir, baseName);
+
     const hlsRelativePath = path.join("hls", `${baseName}.m3u8`);
     await db.query(`UPDATE ${table} SET video_hls_path = ? WHERE id = ?`, [hlsRelativePath, row.id]);
-    
-    console.log(`✅ Converted & updated DB: ${fileName}`);
 
-    // Small delay to reduce CPU/memory spike
-    await new Promise(r => setTimeout(r, 2000));
+    console.log(`✅ Completed conversion & DB update: ${fileName}`);
 
+    await new Promise(r => setTimeout(r, 2000)); 
   } catch (err) {
     console.error(`❌ Conversion failed for ${table}.${row.id}:`, err.message);
   }
@@ -84,7 +85,7 @@ async function batchConvert() {
       if (!colNames.includes("video_hls_path")) continue;
 
       const [rows] = await db.query(`SELECT * FROM ${table}`);
-      console.log(`🎬 Processing table: ${table}, ${rows.length} rows`);
+      console.log(`📂 Table: ${table}, Rows: ${rows.length}`);
 
       for (const row of rows) {
         for (const col of colNames) {
@@ -94,7 +95,7 @@ async function batchConvert() {
         }
       }
     }
-    console.log("✅ Batch conversion completed!");
+    console.log("🏁 Batch conversion completed!");
   } catch (err) {
     console.error("❌ Batch conversion failed:", err);
   } finally {
