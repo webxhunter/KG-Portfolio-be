@@ -12,7 +12,7 @@ const convertToHls = (inputPath, outputDir, outputName) => {
     }
 
     const command = `
-      ffmpeg -y -threads 2 -i "${inputPath}" -preset fast \
+      ffmpeg -y -threads 1 -i "${inputPath}" -preset fast \
       -filter:v:0 "scale=w=640:h=360:force_original_aspect_ratio=decrease,pad=ceil(iw/2)*2:ceil(ih/2)*2" \
       -c:a aac -ar 48000 -b:a:0 96k -c:v:0 h264 -profile:v:0 main -crf 20 \
       -g 48 -keyint_min 48 -sc_threshold 0 -b:v:0 800k -maxrate:v:0 856k \
