@@ -2,8 +2,6 @@ import path from 'path';
 import fs from 'fs';
 import pool from '../db.js';
 
-import path from 'path';
-
 // GET: Get current hero video (only one)
 export const getHeroVideo = async (req, res) => {
   try {
