@@ -7,12 +7,14 @@ export const getHeroVideo = async (req, res) => {
   try {
     const [rows] = await pool.query('SELECT * FROM hero_video ORDER BY id DESC LIMIT 1');
     if (rows.length === 0) return res.json(null);
+
     const row = rows[0];
+
     res.json({
       ...row,
       video_hls_path: row.video_hls_path && row.video_hls_path.endsWith('.m3u8')
-        ? `hls/${path.basename(row.video_path, '.m3u8')}/${path.basename(row.video_path)}`
-        : row.video_hls_path
+        ? `hls/${path.basename(row.video_hls_path, '.m3u8')}/${path.basename(row.video_hls_path)}`
+        : null
     });
   } catch (err) {
     res.status(500).json({ error: 'Failed to fetch hero video' });
