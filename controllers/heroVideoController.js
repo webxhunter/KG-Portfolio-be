@@ -2,6 +2,8 @@ import path from 'path';
 import fs from 'fs';
 import pool from '../db.js';
 
+import path from 'path';
+
 // GET: Get current hero video (only one)
 export const getHeroVideo = async (req, res) => {
   try {
@@ -10,11 +12,13 @@ export const getHeroVideo = async (req, res) => {
 
     const row = rows[0];
 
+    const hlsPath = row.video_hls_path && row.video_hls_path.endsWith('.m3u8')
+      ? `hls/${path.basename(row.video_hls_path, '.m3u8')}/${path.basename(row.video_hls_path)}`
+      : null;
+
     res.json({
       ...row,
-      video_hls_path: row.video_hls_path && row.video_hls_path.endsWith('.m3u8')
-        ? `hls/${path.basename(row.video_hls_path, '.m3u8')}/${path.basename(row.video_hls_path)}`
-        : null
+      video_hls_path: hlsPath
     });
   } catch (err) {
     res.status(500).json({ error: 'Failed to fetch hero video' });
