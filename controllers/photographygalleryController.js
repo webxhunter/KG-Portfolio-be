@@ -10,7 +10,9 @@ export const getAllPhotographyGallery = async (req, res) => {
       category: row.category,
       image_url: row.image_url.replace(/^\/uploads\//, ''), 
       location: row.location,
-      video_hls_path:row.video_hls_path,
+      video_hls_path: row.video_hls_path 
+  ? `hls/${path.basename(row.video_hls_path, '.m3u8')}/${path.basename(row.video_hls_path)}`
+  : null,
       created_at: row.created_at,
       updated_at: row.updated_at
     }));
@@ -35,7 +37,9 @@ export const getPhotographyGalleryById = async (req, res) => {
       category: row.category,
       image_url: row.image_url.replace(/^\/uploads\//, ''), 
       location: row.location,
-      video_hls_path:row.video_hls_path,
+      video_hls_path: row.video_hls_path 
+  ? `hls/${path.basename(row.video_hls_path, '.m3u8')}/${path.basename(row.video_hls_path)}`
+  : null,
       created_at: row.created_at,
       updated_at: row.updated_at
     });

@@ -8,7 +8,13 @@ export const getGalleryByService = async (req, res) => {
   const { service_name } = req.params;
   try {
     const [rows] = await db.query('SELECT * FROM service_gallery WHERE service_name = ? ORDER BY is_main_video DESC, created_at DESC', [service_name]);
-    res.json(rows);
+    // inside getGalleryByService
+res.json(rows.map(r => ({
+  ...r,
+  url: r.url && r.url.endsWith('.m3u8')
+    ? `hls/${path.basename(r.url, '.m3u8')}/${path.basename(r.url)}`
+    : r.url
+})));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

@@ -2,14 +2,24 @@ import pool from '../db.js';
 import path from 'path';
 import fs from 'fs';
 
+// Get all services with HLS path for videos
 export const getServices = async (req, res) => {
   try {
     const [rows] = await pool.query('SELECT * FROM services');
-    res.json(rows);
+
+    const transformed = rows.map(r => ({
+      ...r,
+      media_url: r.media_type === 'video' && r.media_url && r.media_url.endsWith('.m3u8')
+        ? `hls/${path.basename(r.media_url, '.m3u8')}/${path.basename(r.media_url)}`
+        : r.media_url
+    }));
+
+    res.json(transformed);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 };
+
 export const updateService = async (req, res) => {
   const { name } = req.params;
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
@@ -66,10 +76,19 @@ export const getServiceMedia = async (req, res) => {
   const { serviceName } = req.params;
   try {
     const [rows] = await pool.query(
-      'SELECT id, position, media_type, file_path FROM service_media WHERE service_name = ? ORDER BY position',
+      'SELECT id, position, media_type, file_path , video_hls_path FROM service_media WHERE service_name = ? ORDER BY position',
       [serviceName]
     );
-    res.json(rows);
+
+    // Transform video paths to HLS format only
+    const transformed = rows.map(r => ({
+      ...r,
+      file_path: r.media_type === 'video' && r.file_path && r.file_path.endsWith('.m3u8')
+        ? `hls/${path.basename(r.file_path, '.m3u8')}/${path.basename(r.file_path)}`
+        : r.file_path
+    }));
+
+    res.json(transformed);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

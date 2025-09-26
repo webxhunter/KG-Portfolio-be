@@ -49,23 +49,31 @@ export const addCinematographyVideo = async (req, res) => {
   }
 };
 
-
-
-// Get all videos from cinematography_videos (for frontend)
 export const getAllCinematographyVideos = async (req, res) => {
   try {
     const [rows] = await pool.query('SELECT * FROM cinematography_videos');
-    res.json(rows);
+    const formatted = rows.map(r => ({
+      ...r,
+      video_hls_path: r.video_hls_path
+        ? `hls/${path.basename(r.video_hls_path, '.m3u8')}/${path.basename(r.video_hls_path)}`
+        : null
+    }));
+    res.json(formatted);
   } catch (err) {
     res.status(500).json({ message: 'DB Error', error: err.message });
   }
 };
 
-// Get all videos from cinematography_gallery_video (for frontend)
 export const getAllGalleryCinematographyVideos = async (req, res) => {
   try {
     const [rows] = await pool.query('SELECT * FROM cinematography_gallery_video');
-    res.json(rows);
+    const formatted = rows.map(r => ({
+      ...r,
+      video_hls_path: r.video_hls_path
+        ? `hls/${path.basename(r.video_hls_path, '.m3u8')}/${path.basename(r.video_hls_path)}`
+        : null
+    }));
+    res.json(formatted);
   } catch (err) {
     res.status(500).json({ message: 'DB Error', error: err.message });
   }
