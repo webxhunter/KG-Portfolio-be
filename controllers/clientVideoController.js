@@ -5,9 +5,23 @@ import pool from '../db.js';
 // GET: Get current client video (only one)
 export const getClientVideo = async (req, res) => {
   try {
-    const [rows] = await pool.query('SELECT * FROM client_videos ORDER BY id DESC LIMIT 1');
+    const [rows] = await pool.query(
+      'SELECT * FROM client_videos ORDER BY id DESC LIMIT 1'
+    );
+
     if (rows.length === 0) return res.json(null);
-    res.json(rows[0]);
+
+    const video = rows[0];
+
+    // Add dynamic HLS path
+    const transformed = {
+      ...video,
+      video_hls_path: video.video_hls_path
+        ? `hls/${path.basename(video.video_hls_path, '.m3u8')}/${path.basename(video.video_hls_path)}`
+        : null
+    };
+
+    res.json(transformed);
   } catch (err) {
     res.status(500).json({ error: 'Failed to fetch client video' });
   }

@@ -10,9 +10,9 @@ export const getHeroVideo = async (req, res) => {
     const row = rows[0];
     res.json({
       ...row,
-      video_path: row.video_path && row.video_path.endsWith('.m3u8')
+      video_hls_path: row.video_hls_path && row.video_hls_path.endsWith('.m3u8')
         ? `hls/${path.basename(row.video_path, '.m3u8')}/${path.basename(row.video_path)}`
-        : row.video_path
+        : row.video_hls_path
     });
   } catch (err) {
     res.status(500).json({ error: 'Failed to fetch hero video' });
