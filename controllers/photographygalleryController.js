@@ -1,4 +1,5 @@
 import pool from '../db.js';
+import path from 'path';
 
 // GET all photography gallery images
 export const getAllPhotographyGallery = async (req, res) => {
