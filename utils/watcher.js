@@ -8,16 +8,12 @@ import {
   convertAndValidate,
   VIDEO_EXT,
 } from "./helpers.js";
+// use project root as base
+const PROJECT_ROOT = path.resolve("./");
 
-// ✅ __dirname polyfill for ESM
-import { fileURLToPath } from "url";
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
-// adjust paths according to actual folder structure
-const UPLOADS_DIR = path.join(__dirname, "public/uploads");
-const HLS_DIR = path.join(__dirname, "public/hls");
-const PROCESSED_FILE = path.join(__dirname, "processedVideos.json");
+const UPLOADS_DIR = path.join(PROJECT_ROOT, "public/uploads");
+const HLS_DIR = path.join(PROJECT_ROOT, "public/hls");
+const PROCESSED_FILE = path.join(PROJECT_ROOT, "processedVideos.json");
 
 // ✅ Load processed cache
 let processedFiles = new Set();
