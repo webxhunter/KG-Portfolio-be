@@ -158,6 +158,7 @@ const initialScan = (dir = UPLOADS_DIR) => {
   }
   for (const f of fs.readdirSync(dir)) {
     const fullPath = path.join(dir, f);
+    console.log(`🔍 Checking: ${fullPath}`); 
     if (fs.statSync(fullPath).isDirectory()) initialScan(fullPath);
     else enqueueFile(fullPath);
   }
