@@ -1,15 +1,14 @@
 import chokidar from "chokidar";
 import path from "path";
 import fs from "fs";
-import db from "../db.js";
-import { findFileByNameInsensitive } from "./fileFinder.js";
+import db from "../db.js"; 
+import { findFileByNameInsensitive } from "./fileFinder.js"; 
 import {
   isValidVideo,
   convertAndValidate,
   VIDEO_EXT,
-} from "./helpers.js";
-// use project root as base
-const PROJECT_ROOT = path.resolve("./");
+} from "./helpers.js"; 
+const PROJECT_ROOT = path.resolve("../");
 
 const UPLOADS_DIR = path.join(PROJECT_ROOT, "public/uploads");
 const HLS_DIR = path.join(PROJECT_ROOT, "public/hls");
@@ -63,7 +62,6 @@ async function processVideo(filePath) {
     const allValid = await convertAndValidate(absPath, outputDir, baseName);
 
     if (allValid) {
-      // store as: hls/<basename>/<basename>.m3u8
       const hlsRelativePath = path.posix.join("hls", baseName, `${baseName}.m3u8`);
 
       // 🔄 Update DB for this video only
