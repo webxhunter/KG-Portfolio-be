@@ -1,6 +1,5 @@
 import dotenv from "dotenv";
-dotenv.config();
-import { fileURLToPath } from "url";
+dotenv.config(); 
 import chokidar from "chokidar";
 import path from "path";
 import fs from "fs";
@@ -11,11 +10,8 @@ import {
   convertAndValidate,
   VIDEO_EXT,
 } from "./helpers.js"; 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 
-const PROJECT_ROOT = path.resolve(__dirname, "../"); 
-
+const PROJECT_ROOT = process.cwd();
 const UPLOADS_DIR = path.join(PROJECT_ROOT, "public/uploads");
 const HLS_DIR = path.join(PROJECT_ROOT, "public/hls");
 const PROCESSED_FILE = path.join(PROJECT_ROOT, "processedVideos.json");
@@ -158,9 +154,11 @@ const initialScan = (dir = UPLOADS_DIR) => {
   }
   for (const f of fs.readdirSync(dir)) {
     const fullPath = path.join(dir, f);
-    console.log(`🔍 Checking: ${fullPath}`); 
     if (fs.statSync(fullPath).isDirectory()) initialScan(fullPath);
-    else enqueueFile(fullPath);
+    else if (VIDEO_EXT.test(fullPath)) {
+      console.log(`🔍 Found video: ${fullPath}`);
+      enqueueFile(fullPath);
+    }
   }
 };
 
@@ -250,3 +248,4 @@ console.log(`📂 Uploads dir: ${UPLOADS_DIR}`);
 console.log(`📂 HLS dir: ${HLS_DIR}`);
 initialScan();
 startWatcher();
+
