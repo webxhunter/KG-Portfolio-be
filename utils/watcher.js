@@ -137,11 +137,26 @@ const startWatcher = () => {
     depth: 2,
     ignoreInitial: true,
   });
-
-  // 🆕 Handle new videos
+   // 🆕 Handle new videos
   watcher.on("add", (filePath) => {
     if (VIDEO_EXT.test(filePath)) {
       console.log(`📥 New video detected: ${filePath}`);
+
+      // If a file with same base name was previously processed, remove old processed entries and HLS
+      const baseName = path.parse(path.basename(filePath)).name;
+      removeProcessedEntriesByBase(baseName);
+
+      // Also attempt to remove any existing HLS folder with same base (cleanup from previous)
+      const oldOutput = path.join(HLS_DIR, baseName);
+      if (fs.existsSync(oldOutput)) {
+        try {
+          fs.rmSync(oldOutput, { recursive: true, force: true });
+          console.log(`🧹 Deleted existing HLS folder (on add) for ${baseName}`);
+        } catch (e) {
+          console.warn(`⚠️ Could not delete HLS folder ${oldOutput}: ${e.message}`);
+        }
+      }
+
       enqueueFile(filePath);
     }
   });
@@ -149,23 +164,60 @@ const startWatcher = () => {
   // ♻️ Handle updated/replaced videos
   watcher.on("change", async (filePath) => {
     if (VIDEO_EXT.test(filePath)) {
-      console.log(`♻️ Video updated: ${filePath}`);
+      console.log(`♻️ Video changed: ${filePath}`);
 
-      // Remove from processed cache
-      processedFiles.delete(filePath);
-      saveProcessed();
+      // Normalize and remove any processed cache entries with same base
+      const baseName = path.parse(path.basename(filePath)).name;
+      removeProcessedEntriesByBase(baseName);
 
-      // Delete old HLS folder
-      const fileName = path.basename(filePath);
-      const baseName = path.parse(fileName).name;
+      // Delete old HLS folder(s) for this base
       const outputDir = path.join(HLS_DIR, baseName);
       if (fs.existsSync(outputDir)) {
-        fs.rmSync(outputDir, { recursive: true, force: true });
-        console.log(`🧹 Deleted old HLS folder for ${baseName}`);
+        try {
+          fs.rmSync(outputDir, { recursive: true, force: true });
+          console.log(`🧹 Deleted old HLS folder for ${baseName}`);
+        } catch (e) {
+          console.warn(`⚠️ Failed to delete HLS folder for ${baseName}: ${e.message}`);
+        }
       }
+
+      // Also remove the exact filePath from processed cache (safe)
+      processedFiles.delete(path.resolve(filePath));
+      saveProcessed();
 
       // Reconvert and update DB
       enqueueFile(filePath);
     }
   });
+
+  // Optional: log deletes (cleanup)
+  watcher.on("unlink", (filePath) => {
+    if (VIDEO_EXT.test(filePath)) {
+      console.log(`🗑️ Source video deleted: ${filePath}`);
+      // when a source is deleted, optionally remove its HLS and processed cache
+      const baseName = path.parse(path.basename(filePath)).name;
+      const outputDir = path.join(HLS_DIR, baseName);
+      if (fs.existsSync(outputDir)) {
+        try {
+          fs.rmSync(outputDir, { recursive: true, force: true });
+          console.log(`🧹 Deleted HLS folder for missing source: ${baseName}`);
+        } catch (e) {
+          console.warn(`⚠️ Could not delete HLS folder for ${baseName}: ${e.message}`);
+        }
+      }
+      removeProcessedEntriesByBase(baseName);
+    }
+  });
+
+  watcher.on("error", (err) => {
+    console.error("⚠️ watcher error:", err);
+  });
+
+  console.log("👀 Watcher started, monitoring uploads...");
 };
+
+console.log("👀 Starting video watcher...");
+console.log(`📂 Uploads dir: ${UPLOADS_DIR}`);
+console.log(`📂 HLS dir: ${HLS_DIR}`);
+initialScan();
+startWatcher();
