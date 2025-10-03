@@ -1,3 +1,5 @@
+import dotenv from "dotenv";
+dotenv.config(); 
 import chokidar from "chokidar";
 import path from "path";
 import fs from "fs";
