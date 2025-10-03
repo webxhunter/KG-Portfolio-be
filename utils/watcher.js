@@ -1,5 +1,6 @@
 import dotenv from "dotenv";
-dotenv.config(); 
+dotenv.config();
+import { fileURLToPath } from "url";
 import chokidar from "chokidar";
 import path from "path";
 import fs from "fs";
@@ -10,7 +11,10 @@ import {
   convertAndValidate,
   VIDEO_EXT,
 } from "./helpers.js"; 
-const PROJECT_ROOT = path.resolve("../");
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+const PROJECT_ROOT = path.resolve(__dirname, "../"); 
 
 const UPLOADS_DIR = path.join(PROJECT_ROOT, "public/uploads");
 const HLS_DIR = path.join(PROJECT_ROOT, "public/hls");
