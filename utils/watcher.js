@@ -9,8 +9,9 @@ import {
   VIDEO_EXT,
 } from "./helpers.js";
 
-const UPLOADS_DIR = path.join(process.cwd(), "public/uploads");
-const HLS_DIR = path.join(process.cwd(), "public/hls");
+// adjust paths according to actual folder structure
+const UPLOADS_DIR = path.join(process.cwd(), "../public/uploads");
+const HLS_DIR = path.join(process.cwd(), "../public/hls");
 const PROCESSED_FILE = path.join(process.cwd(), "processedVideos.json");
 
 // ✅ Load processed cache
