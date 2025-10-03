@@ -129,7 +129,7 @@ const initialScan = (dir = UPLOADS_DIR) => {
   }
 };
 
-// ✅ Watch new uploads
+// ✅ Watch new uploads or updates
 const startWatcher = () => {
   const watcher = chokidar.watch(UPLOADS_DIR, {
     ignored: /(^|[\/\\])\../,
@@ -137,16 +137,35 @@ const startWatcher = () => {
     depth: 2,
     ignoreInitial: true,
   });
+
+  // 🆕 Handle new videos
   watcher.on("add", (filePath) => {
     if (VIDEO_EXT.test(filePath)) {
       console.log(`📥 New video detected: ${filePath}`);
       enqueueFile(filePath);
     }
   });
+
+  // ♻️ Handle updated/replaced videos
+  watcher.on("change", async (filePath) => {
+    if (VIDEO_EXT.test(filePath)) {
+      console.log(`♻️ Video updated: ${filePath}`);
+
+      // Remove from processed cache
+      processedFiles.delete(filePath);
+      saveProcessed();
+
+      // Delete old HLS folder
+      const fileName = path.basename(filePath);
+      const baseName = path.parse(fileName).name;
+      const outputDir = path.join(HLS_DIR, baseName);
+      if (fs.existsSync(outputDir)) {
+        fs.rmSync(outputDir, { recursive: true, force: true });
+        console.log(`🧹 Deleted old HLS folder for ${baseName}`);
+      }
+
+      // Reconvert and update DB
+      enqueueFile(filePath);
+    }
+  });
 };
-
-console.log("👀 Starting video watcher...");
-initialScan();
-startWatcher();
-
-

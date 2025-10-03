@@ -24,7 +24,6 @@ export const getAllPhotographyGallery = async (req, res) => {
   }
 };
 
-
 // GET single photography gallery image by ID
 export const getPhotographyGalleryById = async (req, res) => {
   const { id } = req.params;
@@ -48,7 +47,6 @@ export const getPhotographyGalleryById = async (req, res) => {
     res.status(500).json({ message: err.message });
   }
 };
-
 
 // UPLOAD new photography image
 export const uploadPhotographyGallery = async (req, res) => {
@@ -97,7 +95,6 @@ export const updatePhotographyGallery = async (req, res) => {
     res.status(500).json({ message: err.message });
   }
 };
-
 
 // DELETE photography image by ID
 export const deletePhotographyGallery = async (req, res) => {
