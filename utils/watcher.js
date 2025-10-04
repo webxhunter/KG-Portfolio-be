@@ -111,9 +111,10 @@ async function scanDbForChangedFiles() {
     isScanning = false;
   }
 }
+// Update DB for a specific video file
+async function updateDbWithNewHlsPath(filePath, newHls) {
+  const baseName = path.parse(filePath).name;
 
-// ✅ Update DB with new HLS path
-async function updateDbWithNewHlsPath(baseName, newHls) {
   try {
     const [tables] = await pool.query("SHOW TABLES");
 
@@ -123,20 +124,26 @@ async function updateDbWithNewHlsPath(baseName, newHls) {
       const videoCols = cols.filter(c => /video/i.test(c.Field));
 
       for (const col of videoCols) {
+        const [records] = await pool.query(
+          `SELECT * FROM ${table} WHERE ${col.Field} LIKE ? LIMIT 1`,
+          [`%${baseName}%`]
+        );
+        if (records.length === 0) continue;
         const query = `
           UPDATE ${table}
           SET video_hls_path = ?
           WHERE ${col.Field} LIKE ?`;
-        await pool.query(query, [`/hls/${newHls}`, `%${baseName}%`]);
+        await pool.query(query, [`/hls/${baseName}.m3u8`, `%${baseName}%`]);
+
+        console.log(`✅ DB updated for table "${table}" and video: ${baseName}`);
+        return; 
       }
     }
-
-    console.log(`✅ DB updated with new HLS path for: ${baseName}`);
+    console.warn(`⚠️ No table found for video: ${baseName}`);
   } catch (err) {
     console.error(`⚠️ Failed to update DB for ${baseName}:`, err.message);
   }
 }
-
 // ✅ Unified Watcher
 const startWatcher = () => {
   const watcher = chokidar.watch(UPLOADS_DIR, {
