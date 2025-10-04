@@ -264,20 +264,25 @@ async function scanDbForChangedFiles() {
             continue;
           }
 
-          // Case B: processed exists but DB hls path is different → treat as update
-          if (alreadyProcessed && rec.video_hls_path && rec.video_hls_path !== expectedHls) {
-            console.log(`♻️ DB update detected for: ${filename} (table: ${table}) — queued for regen`);
-            // queue for update: pass dbTarget when actually processing
-            pendingUpdates.add(filePath);
-            if (!isProcessing) {
-              pendingUpdates.delete(filePath);
-              await processSingleFile(filePath, { dbTarget: { table, id: rec.id }, isUpdate: true });
-            } else {
-              console.log(`⏳ Busy — queued update for later: ${filename}`);
-            }
-            continue;
-          }
+          // Case B: processed exists but DB hls filename is different → treat as update
+if (alreadyProcessed && rec.video_hls_path) {
+  const dbHlsFile = path.basename(rec.video_hls_path); 
+  const expectedHlsFile = path.basename(expectedHls);  
 
+  if (dbHlsFile !== expectedHlsFile) {
+    console.log(`♻️ DB update detected for: ${filename} (table: ${table}) — queued for regen`);
+    pendingUpdates.add(filePath);
+    if (!isProcessing) {
+      pendingUpdates.delete(filePath);
+      await processSingleFile(filePath, { dbTarget: { table, id: rec.id }, isUpdate: true });
+    } else {
+      console.log(`⏳ Busy — queued update for later: ${filename}`);
+    }
+    continue;
+  } else {
+    
+  }
+}
         }
       }
     }
