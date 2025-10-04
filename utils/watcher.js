@@ -4,7 +4,7 @@ dotenv.config();
 import chokidar from "chokidar";
 import fs from "fs";
 import path from "path";
-import pool from "../db.js"; 
+import pool from "../db.js";
 import {
   VIDEO_EXT,
   isValidVideo,
@@ -18,9 +18,10 @@ const UPLOADS_DIR = path.join(PROJECT_ROOT, "public/uploads");
 const HLS_DIR = path.join(PROJECT_ROOT, "public/hls");
 const PROCESSED_JSON = path.join(PROJECT_ROOT, "processedVideos.json");
 
-const pendingUpdates = new Set(); 
+const pendingUpdates = new Set();
 let isProcessing = false;
 let isScanning = false;
+
 function loadProcessedSet() {
   try {
     if (!fs.existsSync(PROCESSED_JSON)) return new Set();
@@ -51,6 +52,27 @@ function removeProcessedEntriesByBase(baseName) {
     }
   }
   if (changed) saveProcessedSet(processedSet);
+}
+
+async function waitUntilStableAdaptive(filePath, maxWaitMs = 60 * 60 * 1000) {
+  try {
+    if (!fs.existsSync(filePath)) {
+      console.log(`⚠️ File does not exist for stability check: ${filePath}`);
+      return false;
+    }
+    const stats = fs.statSync(filePath);
+    const size = stats.size;
+    let stableChecks = 3;
+    if (size < 10_000_000) stableChecks = 2; // <10MB
+    else if (size < 100_000_000) stableChecks = 3; // 10-100MB
+    else stableChecks = 5; // >100MB
+
+    console.log(`ℹ️ Adaptive stability settings for ${path.basename(filePath)}: size=${size} bytes, stableChecks=${stableChecks}, maxWait=${maxWaitMs}ms`);
+    return await waitUntilStable(filePath, maxWaitMs, stableChecks);
+  } catch (err) {
+    console.error("⚠️ waitUntilStableAdaptive error:", err && err.message ? err.message : err);
+    return false;
+  }
 }
 
 async function findDbRecordForFilename(filename) {
@@ -102,7 +124,6 @@ async function updateDbRecordHls(table, id, hlsPath) {
 }
 
 async function processPendingUpdates() {
-  // processing ongoing? bail — caller must call again when finished
   if (isProcessing) return;
   if (pendingUpdates.size === 0) return;
 
@@ -111,15 +132,12 @@ async function processPendingUpdates() {
   pendingUpdates.delete(filePath);
 
   await processSingleFile(filePath);
-  // after completion, attempt next queued file
   setImmediate(processPendingUpdates);
 }
 
 // Main worker: process a single filePath (convert + update only the targeted DB row)
 async function processSingleFile(filePath, options = {}) {
-  // options may contain dbTarget: {table,id} if known (DB scan path)
   if (isProcessing) {
-    // should not happen (we queue), but safe-guard
     pendingUpdates.add(filePath);
     console.log(`⏳ Busy - re-queued: ${path.basename(filePath)}`);
     return;
@@ -132,12 +150,10 @@ async function processSingleFile(filePath, options = {}) {
 
   try {
     console.log(`📁 Checking file stability for: ${filePath}`);
-    const stable = await waitUntilStable(filePath, 60 * 60 * 1000 /* 1 hour */, 3);
+    const stable = await waitUntilStableAdaptive(filePath, 60 * 60 * 1000 /* 1 hour */);
     if (!stable) {
       console.warn(`⚠️ Not stable / missing: ${filePath} → skipping for now`);
-      // if not stable, don't declare processed; queue for later
       isProcessing = false;
-      // requeue for later attempt
       if (!pendingUpdates.has(filePath)) {
         pendingUpdates.add(filePath);
         console.log(`⏳ Queued for retry later: ${filename}`);
@@ -160,11 +176,7 @@ async function processSingleFile(filePath, options = {}) {
       removeOldHls(baseName);
       removeProcessedEntriesByBase(baseName);
     }
-
-    // ensure output dir exists
     fs.mkdirSync(outputDir, { recursive: true });
-
-    // convert & validate (convertToHls is called once inside convertAndValidate)
     console.log(`🎬 Converting: ${filename} → HLS (all resolutions)`);
     const ok = await convertAndValidate(filePath, outputDir, baseName);
 
@@ -175,7 +187,6 @@ async function processSingleFile(filePath, options = {}) {
     }
 
     console.log(`✅ Conversion complete for ${baseName}`);
-    // Build HLS relative path exactly as you wanted (single filename)
     const hlsRelative = `/hls/${baseName}.m3u8`;
 
     // If dbTarget provided (DB scan found specific row), update that row only.
@@ -230,13 +241,10 @@ async function scanDbForChangedFiles() {
       if (!hasHls) {
         continue;
       }
-
-      // candidate video columns in the table
       const videoCols = cols.filter((c) => /video/i.test(c.Field));
       if (videoCols.length === 0) continue;
 
       for (const vc of videoCols) {
-        // fetch id, the video column value and current video_hls_path
         const sql = `SELECT id, \`${vc.Field}\` AS video_path, video_hls_path FROM \`${table}\` WHERE \`${vc.Field}\` IS NOT NULL`;
         const [rows] = await pool.query(sql);
 
@@ -265,24 +273,22 @@ async function scanDbForChangedFiles() {
           }
 
           // Case B: processed exists but DB hls filename is different → treat as update
-if (alreadyProcessed && rec.video_hls_path) {
-  const dbHlsFile = path.basename(rec.video_hls_path); 
-  const expectedHlsFile = path.basename(expectedHls);  
+          if (alreadyProcessed && rec.video_hls_path) {
+            const dbHlsFile = path.basename(rec.video_hls_path);
+            const expectedHlsFile = path.basename(expectedHls);
 
-  if (dbHlsFile !== expectedHlsFile) {
-    console.log(`♻️ DB update detected for: ${filename} (table: ${table}) — queued for regen`);
-    pendingUpdates.add(filePath);
-    if (!isProcessing) {
-      pendingUpdates.delete(filePath);
-      await processSingleFile(filePath, { dbTarget: { table, id: rec.id }, isUpdate: true });
-    } else {
-      console.log(`⏳ Busy — queued update for later: ${filename}`);
-    }
-    continue;
-  } else {
-    
-  }
-}
+            if (dbHlsFile !== expectedHlsFile) {
+              console.log(`♻️ DB update detected for: ${filename} (table: ${table}) — queued for regen`);
+              pendingUpdates.add(filePath);
+              if (!isProcessing) {
+                pendingUpdates.delete(filePath);
+                await processSingleFile(filePath, { dbTarget: { table, id: rec.id }, isUpdate: true });
+              } else {
+                console.log(`⏳ Busy — queued update for later: ${filename}`);
+              }
+              continue;
+            }
+          }
         }
       }
     }
@@ -311,9 +317,7 @@ function startFsWatcher() {
       console.log(`⏭️ No DB record found for new file: ${path.basename(filePath)} — skipping`);
       return;
     }
-    // if DB had hls already, treat as update; else new
     const isUpdate = !!rec.video_hls_path;
-    // queue or process immediately
     pendingUpdates.add(filePath);
     if (!isProcessing) {
       pendingUpdates.delete(filePath);
@@ -365,3 +369,4 @@ console.log("📂 Uploads:", UPLOADS_DIR);
 console.log("📂 HLS:", HLS_DIR);
 startFsWatcher();
 setInterval(scanDbForChangedFiles, 1000);
+
