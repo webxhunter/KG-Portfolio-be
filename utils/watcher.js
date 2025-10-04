@@ -8,7 +8,7 @@ import {
   waitUntilStable,
   convertAndValidate
 } from "./helpers.js";
-import { findFileByNameInsensitive } from "./filefinder.js";
+import { findFileByNameInsensitive } from "./fileFinder.js";
 
 const UPLOADS_DIR = path.resolve("public/uploads");
 const HLS_DIR = path.resolve("public/hls");
