@@ -12,10 +12,29 @@ import { findFileByNameInsensitive } from "./fileFinder.js";
 
 const UPLOADS_DIR = path.resolve("public/uploads");
 const HLS_DIR = path.resolve("public/hls");
+const PROCESSED_JSON = path.resolve("/var/www/KG-Portfolio-be/processedVideos.json");
 
 const processedFiles = new Set();
 let isScanning = false;
 let isProcessing = false; 
+
+// ✅ Load processed videos from JSON
+function loadProcessedVideos() {
+  try {
+    if (!fs.existsSync(PROCESSED_JSON)) return new Set();
+    const data = JSON.parse(fs.readFileSync(PROCESSED_JSON, "utf-8"));
+    return new Set(data);
+  } catch {
+    return new Set();
+  }
+}
+
+// ✅ Save processed video to JSON
+function saveProcessedVideo(filePath) {
+  const processed = loadProcessedVideos();
+  processed.add(filePath);
+  fs.writeFileSync(PROCESSED_JSON, JSON.stringify(Array.from(processed), null, 2));
+}
 
 // ✅ Remove old HLS outputs
 function removeOldHls(baseName) {
@@ -28,6 +47,12 @@ function removeOldHls(baseName) {
 
 // ✅ Process video one-by-one
 async function processVideo(filePath) {
+  const processedVideos = loadProcessedVideos();
+  if (processedVideos.has(filePath)) {
+    console.log(`⏭️ Already processed, skipping: ${filePath}`);
+    return;
+  }
+
   if (isProcessing) {
     console.log(`⏳ Waiting... Another conversion is in progress`);
     return;
@@ -55,7 +80,6 @@ async function processVideo(filePath) {
     return;
   }
 
-  // Delete old chunks before reprocessing
   removeOldHls(baseName);
   fs.mkdirSync(outputDir, { recursive: true });
 
@@ -64,54 +88,17 @@ async function processVideo(filePath) {
 
   if (success) {
     console.log(`✅ Conversion completed for ${baseName}`);
-    await updateDbWithNewHlsPath(baseName, `${baseName}.m3u8`);
+    await updateDbWithNewHlsPath(filePath, `${baseName}.m3u8`);
+    saveProcessedVideo(filePath); // ✅ Mark as processed
   } else {
-    console.warn(`⚠️ Conversion failed for ${baseName}`);
+    console.warn(`⚠️ Conversion failed for ${baseName}, skipping for now`);
   }
 
   processedFiles.add(filePath);
   isProcessing = false;
 }
 
-// ✅ Periodic DB Scanner
-async function scanDbForChangedFiles() {
-  if (isScanning || isProcessing) return; // avoid overload
-  isScanning = true;
-
-  try {
-    const [tables] = await pool.query("SHOW TABLES");
-    for (const row of tables) {
-      const table = Object.values(row)[0];
-
-      const [cols] = await pool.query(`SHOW COLUMNS FROM ${table}`);
-      const videoCols = cols.filter(c => /video/i.test(c.Field));
-
-      if (videoCols.length === 0) continue;
-
-      const [records] = await pool.query(`SELECT * FROM ${table}`);
-      for (const rec of records) {
-        for (const col of videoCols) {
-          const val = rec[col.Field];
-          if (typeof val !== "string" || !VIDEO_EXT.test(val)) continue;
-
-          const filename = path.basename(val);
-          const filePath = findFileByNameInsensitive(filename, UPLOADS_DIR);
-          if (!filePath) continue;
-
-          if (!processedFiles.has(filePath)) {
-            console.log(`🔄 DB-triggered video detected: ${filename}`);
-            await processVideo(filePath);
-          }
-        }
-      }
-    }
-  } catch (err) {
-    console.error("⚠️ DB Watcher Error:", err.message);
-  } finally {
-    isScanning = false;
-  }
-}
-// Update DB for a specific video file
+// ✅ Update DB for a specific video file
 async function updateDbWithNewHlsPath(filePath, newHls) {
   const baseName = path.parse(filePath).name;
 
@@ -125,10 +112,11 @@ async function updateDbWithNewHlsPath(filePath, newHls) {
 
       for (const col of videoCols) {
         const [records] = await pool.query(
-          `SELECT * FROM ${table} WHERE ${col.Field} LIKE ? LIMIT 1`,
+          `SELECT * FROM ${table} WHERE ${col.Field} LIKE ? AND video_hls_path IS NULL LIMIT 1`,
           [`%${baseName}%`]
         );
         if (records.length === 0) continue;
+
         const query = `
           UPDATE ${table}
           SET video_hls_path = ?
@@ -139,11 +127,55 @@ async function updateDbWithNewHlsPath(filePath, newHls) {
         return; 
       }
     }
-    console.warn(`⚠️ No table found for video: ${baseName}`);
+
+    console.warn(`⚠️ No DB entry found for video: ${baseName} or already processed`);
   } catch (err) {
     console.error(`⚠️ Failed to update DB for ${baseName}:`, err.message);
   }
 }
+
+// ✅ Scan DB for new videos with null HLS path
+async function scanDbForChangedFiles() {
+  if (isScanning || isProcessing) return; 
+  isScanning = true;
+
+  try {
+    const [tables] = await pool.query("SHOW TABLES");
+    for (const row of tables) {
+      const table = Object.values(row)[0];
+
+      const [cols] = await pool.query(`SHOW COLUMNS FROM ${table}`);
+      const videoCols = cols.filter(c => /video/i.test(c.Field));
+      if (videoCols.length === 0) continue;
+
+      for (const col of videoCols) {
+        const [records] = await pool.query(
+          `SELECT * FROM ${table} WHERE ${col.Field} IS NOT NULL AND video_hls_path IS NULL`
+        );
+
+        for (const rec of records) {
+          const val = rec[col.Field];
+          if (typeof val !== "string" || !VIDEO_EXT.test(val)) continue;
+
+          const filename = path.basename(val);
+          const filePath = findFileByNameInsensitive(filename, UPLOADS_DIR);
+          if (!filePath) continue;
+
+          const processedVideos = loadProcessedVideos();
+          if (!processedVideos.has(filePath)) {
+            console.log(`🔄 DB-triggered video detected: ${filename}`);
+            await processVideo(filePath);
+          }
+        }
+      }
+    }
+  } catch (err) {
+    console.error("⚠️ DB Watcher Error:", err.message);
+  } finally {
+    isScanning = false;
+  }
+}
+
 // ✅ Unified Watcher
 const startWatcher = () => {
   const watcher = chokidar.watch(UPLOADS_DIR, {
@@ -173,7 +205,7 @@ const startWatcher = () => {
 
   watcher.on("error", (err) => console.error("⚠️ Watcher error:", err));
 
-  console.log("👀 Watcher started — Monitoring uploads & DB for changes...");
+  console.log("👀 Watcher started — Monitoring uploads & DB for new/updated videos...");
   setInterval(scanDbForChangedFiles, 1000);
 };
 
