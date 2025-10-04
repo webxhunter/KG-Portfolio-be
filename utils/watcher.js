@@ -46,13 +46,7 @@ function removeOldHls(baseName) {
 }
 
 // ✅ Process video one-by-one
-async function processVideo(filePath) {
-  const processedVideos = loadProcessedVideos();
-  if (processedVideos.has(filePath)) {
-    console.log(`⏭️ Already processed, skipping: ${filePath}`);
-    return;
-  }
-
+async function processVideo(filePath, isUpdate = false) {
   if (isProcessing) {
     console.log(`⏳ Waiting... Another conversion is in progress`);
     return;
@@ -80,7 +74,20 @@ async function processVideo(filePath) {
     return;
   }
 
-  removeOldHls(baseName);
+  // If this is an update, remove old HLS first
+  if (isUpdate) {
+    console.log(`♻️ Video updated — regenerating HLS: ${filePath}`);
+    removeOldHls(baseName);
+
+    // Remove from processedVideos.json if exists
+    const processedVideos = loadProcessedVideos();
+    if (processedVideos.has(filePath)) {
+      processedVideos.delete(filePath);
+      saveProcessedVideos(processedVideos);
+      console.log(`🗂️ Updated processedVideos.json entry for: ${baseName}`);
+    }
+  }
+
   fs.mkdirSync(outputDir, { recursive: true });
 
   console.log(`🎬 Starting HLS conversion for: ${baseName}`);
@@ -89,15 +96,18 @@ async function processVideo(filePath) {
   if (success) {
     console.log(`✅ Conversion completed for ${baseName}`);
     await updateDbWithNewHlsPath(filePath, `${baseName}.m3u8`);
-    saveProcessedVideo(filePath); // ✅ Mark as processed
+
+    // Add/update processedVideos.json
+    const processedVideos = loadProcessedVideos();
+    processedVideos.add(filePath);
+    saveProcessedVideos(processedVideos);
   } else {
-    console.warn(`⚠️ Conversion failed for ${baseName}, skipping for now`);
+    console.warn(`⚠️ Conversion failed for ${baseName}`);
   }
 
   processedFiles.add(filePath);
   isProcessing = false;
 }
-
 // ✅ Update DB for a specific video file
 async function updateDbWithNewHlsPath(filePath, newHls) {
   const baseName = path.parse(filePath).name;
