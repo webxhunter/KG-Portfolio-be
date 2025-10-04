@@ -1,230 +1,173 @@
-import dotenv from "dotenv";
-dotenv.config();
 import chokidar from "chokidar";
-import path from "path";
 import fs from "fs";
-import db from "../db.js";
-import { findFileByNameInsensitive } from "./fileFinder.js";
-import convertToHls from "./hlsconvert.js";
+import path from "path";
+import pool from "../db.js";
+import {
+  VIDEO_EXT,
+  isValidVideo,
+  waitUntilStable,
+  convertAndValidate
+} from "./helpers.js";
+import { findFileByNameInsensitive } from "./filefinder.js";
 
-const PROJECT_ROOT = process.cwd();
-const UPLOADS_DIR = path.join(PROJECT_ROOT, "public/uploads");
-const HLS_DIR = path.join(PROJECT_ROOT, "public/hls");
-const VIDEO_EXT = /\.(mp4|mov|avi|mkv|webm)$/i;
-const PROCESSED_FILE = path.join(PROJECT_ROOT, "processedVideos.json");
+const UPLOADS_DIR = path.resolve("public/uploads");
+const HLS_DIR = path.resolve("public/hls");
 
-// Load processed cache
-let processedFiles = new Set();
-if (fs.existsSync(PROCESSED_FILE)) {
-  try {
-    processedFiles = new Set(JSON.parse(fs.readFileSync(PROCESSED_FILE, "utf-8")));
-  } catch {
-    console.warn("⚠️ Failed to load cache, starting fresh.");
-    processedFiles = new Set();
+const processedFiles = new Set();
+let isScanning = false;
+let isProcessing = false; 
+
+// ✅ Remove old HLS outputs
+function removeOldHls(baseName) {
+  const dir = path.join(HLS_DIR, baseName);
+  if (fs.existsSync(dir)) {
+    fs.rmSync(dir, { recursive: true, force: true });
+    console.log(`🗑️ Removed old HLS for: ${baseName}`);
   }
 }
-const saveProcessed = () =>
-  fs.writeFileSync(PROCESSED_FILE, JSON.stringify([...processedFiles], null, 2));
 
-// Remove processed entries by base name
-function removeProcessedEntriesByBase(baseName) {
-  const toRemove = [...processedFiles].filter((p) => p.includes(baseName));
-  if (!toRemove.length) return;
-  for (const p of toRemove) processedFiles.delete(p);
-  saveProcessed();
-}
-
-// Wait until file is stable (fully uploaded)
-const waitForFileStable = async (filePath, interval = 3000, maxWaitMinutes = 60) => {
-  try {
-    if (!fs.existsSync(filePath)) return false;
-
-    const maxLoops = Math.floor((maxWaitMinutes * 60 * 1000) / interval);
-    let lastSize = fs.statSync(filePath).size;
-    let sameCount = 0;
-
-    for (let i = 0; i < maxLoops; i++) {
-      await new Promise((r) => setTimeout(r, interval));
-
-      if (!fs.existsSync(filePath)) return false;
-      const newSize = fs.statSync(filePath).size;
-
-      if (newSize === lastSize && newSize > 0) {
-        sameCount++;
-        if (sameCount >= 2) {
-          console.log(`✅ File stabilized after ${((i + 1) * interval) / 1000}s: ${filePath}`);
-          return true;
-        }
-      } else {
-        sameCount = 0; 
-      }
-
-      console.log(`⏳ Waiting... (${i + 1}/${maxLoops}) size changed ${lastSize} → ${newSize}`);
-      lastSize = newSize;
-    }
-
-    console.log(`⚠️ File did not stabilize within ${maxWaitMinutes} minutes: ${filePath}`);
-    return false;
-  } catch (err) {
-    console.error(`❌ Error checking file stability for ${filePath}:`, err.message);
-    return false;
-  }
-};
-// Convert video & update DB
+// ✅ Process video one-by-one
 async function processVideo(filePath) {
+  if (isProcessing) {
+    console.log(`⏳ Waiting... Another conversion is in progress`);
+    return;
+  }
+
+  isProcessing = true;
+  const baseName = path.parse(filePath).name;
+  const outputDir = path.join(HLS_DIR, baseName);
+
+  console.log(`📁 Checking file stability for: ${filePath}`);
+  const stable = await waitUntilStable(filePath, 60 * 60 * 1000, 3);
+
+  if (!stable) {
+    console.warn(`⚠️ Skipping — file not stable: ${filePath}`);
+    isProcessing = false;
+    return;
+  }
+
+  console.log(`✅ File is stable: ${filePath}`);
+
+  const valid = await isValidVideo(filePath);
+  if (!valid) {
+    console.warn(`⚠️ Invalid or corrupted video skipped: ${filePath}`);
+    isProcessing = false;
+    return;
+  }
+
+  // Delete old chunks before reprocessing
+  removeOldHls(baseName);
+  fs.mkdirSync(outputDir, { recursive: true });
+
+  console.log(`🎬 Starting HLS conversion for: ${baseName}`);
+  const success = await convertAndValidate(filePath, outputDir, baseName);
+
+  if (success) {
+    console.log(`✅ Conversion completed for ${baseName}`);
+    await updateDbWithNewHlsPath(baseName, `${baseName}.m3u8`);
+  } else {
+    console.warn(`⚠️ Conversion failed for ${baseName}`);
+  }
+
+  processedFiles.add(filePath);
+  isProcessing = false;
+}
+
+// ✅ Periodic DB Scanner
+async function scanDbForChangedFiles() {
+  if (isScanning || isProcessing) return; // avoid overload
+  isScanning = true;
+
   try {
-    const absPath = path.resolve(filePath);
-    if (!VIDEO_EXT.test(absPath) || processedFiles.has(absPath)) return;
+    const [tables] = await pool.query("SHOW TABLES");
+    for (const row of tables) {
+      const table = Object.values(row)[0];
 
-    // Wait for file to stabilize
-    const stable = await waitForFileStable(absPath);
-    if (!stable) {
-      console.log(`⚠️ File still uploading: ${absPath}, will retry`);
-      enqueueFileDebounced(absPath);
-      return;
-    }
+      const [cols] = await pool.query(`SHOW COLUMNS FROM ${table}`);
+      const videoCols = cols.filter(c => /video/i.test(c.Field));
 
-    processedFiles.add(absPath);
+      if (videoCols.length === 0) continue;
 
-    const fileName = path.basename(absPath);
-    const baseName = path.parse(fileName).name;
-    const outputDir = path.join(HLS_DIR, baseName);
+      const [records] = await pool.query(`SELECT * FROM ${table}`);
+      for (const rec of records) {
+        for (const col of videoCols) {
+          const val = rec[col.Field];
+          if (typeof val !== "string" || !VIDEO_EXT.test(val)) continue;
 
-    console.log(`▶️ Processing: ${fileName}`);
+          const filename = path.basename(val);
+          const filePath = findFileByNameInsensitive(filename, UPLOADS_DIR);
+          if (!filePath) continue;
 
-    if (!fs.existsSync(outputDir)) fs.mkdirSync(outputDir, { recursive: true });
-
-    // Convert using your convertToHls
-    try {
-      await convertToHls(absPath, outputDir, baseName);
-    } catch (err) {
-      console.error(`❌ Conversion failed for ${fileName}:`, err.message);
-      processedFiles.delete(absPath);
-      saveProcessed();
-      return;
-    }
-
-    console.log(`✅ HLS conversion completed for: ${fileName}`);
-
-    // Update DB
-    const hlsRelativePath = path.posix.join("hls", baseName, `${baseName}.m3u8`);
-    const [tables] = await db.query("SHOW TABLES");
-    for (const t of tables) {
-      const table = Object.values(t)[0];
-      const [columns] = await db.query(`SHOW COLUMNS FROM ${table}`);
-      const colNames = columns.map((c) => c.Field);
-      if (!colNames.includes("video_hls_path")) continue;
-
-      const matchedFile = findFileByNameInsensitive(fileName, UPLOADS_DIR);
-      if (!matchedFile) continue;
-
-      for (const col of colNames) {
-        if (col === "video_hls_path" || col === "id") continue;
-
-        let [rows] = await db.query(
-          `SELECT id FROM ${table} WHERE ${col} LIKE ? LIMIT 1`,
-          [`%${fileName}%`]
-        );
-
-        if (rows.length) {
-          await db.query(`UPDATE ${table} SET video_hls_path = ? WHERE id = ?`, [
-            hlsRelativePath,
-            rows[0].id,
-          ]);
-          console.log(`💾 DB updated in ${table} for ${fileName} → ${hlsRelativePath}`);
-          break;
+          if (!processedFiles.has(filePath)) {
+            console.log(`🔄 DB-triggered video detected: ${filename}`);
+            await processVideo(filePath);
+          }
         }
       }
     }
-
-    console.log(`🏁 Processing done for ${fileName}`);
   } catch (err) {
-    console.error("❌ Error in processVideo:", err.message || err);
+    console.error("⚠️ DB Watcher Error:", err.message);
   } finally {
-    saveProcessed();
+    isScanning = false;
   }
 }
 
-// Queue (1 video at a time)
-const fileQueue = [];
-let isProcessing = false;
-const processQueue = async () => {
-  if (isProcessing || !fileQueue.length) return;
-  isProcessing = true;
-  const filePath = fileQueue.shift();
-  await processVideo(filePath);
-  setTimeout(() => {
-    isProcessing = false;
-    processQueue();
-  }, 2000);
-};
-const enqueueFile = (filePath) => {
-  const absPath = path.resolve(filePath);
-  if (VIDEO_EXT.test(absPath) && !processedFiles.has(absPath)) {
-    fileQueue.push(absPath);
-    console.log(`🗂 Enqueued: ${absPath} (queue size: ${fileQueue.length})`);
-    processQueue();
+// ✅ Update DB with new HLS path
+async function updateDbWithNewHlsPath(baseName, newHls) {
+  try {
+    const [tables] = await pool.query("SHOW TABLES");
+
+    for (const row of tables) {
+      const table = Object.values(row)[0];
+      const [cols] = await pool.query(`SHOW COLUMNS FROM ${table}`);
+      const videoCols = cols.filter(c => /video/i.test(c.Field));
+
+      for (const col of videoCols) {
+        const query = `
+          UPDATE ${table}
+          SET video_hls_path = ?
+          WHERE ${col.Field} LIKE ?`;
+        await pool.query(query, [`/hls/${newHls}`, `%${baseName}%`]);
+      }
+    }
+
+    console.log(`✅ DB updated with new HLS path for: ${baseName}`);
+  } catch (err) {
+    console.error(`⚠️ Failed to update DB for ${baseName}:`, err.message);
   }
-};
+}
 
-// Debounce to avoid multiple triggers
-const debounceMap = new Map();
-const enqueueFileDebounced = (filePath, delay = 5000) => {
-  if (debounceMap.has(filePath)) clearTimeout(debounceMap.get(filePath));
-  const timer = setTimeout(() => {
-    debounceMap.delete(filePath);
-    enqueueFile(filePath);
-  }, delay);
-  debounceMap.set(filePath, timer);
-};
-
-// Start watcher
+// ✅ Unified Watcher
 const startWatcher = () => {
   const watcher = chokidar.watch(UPLOADS_DIR, {
     ignored: /(^|[\/\\])\../,
     persistent: true,
     depth: 2,
-    ignoreInitial: true,
+    ignoreInitial: true
   });
 
-  watcher.on("add", (filePath) => {
-    if (VIDEO_EXT.test(filePath)) {
-      console.log(`📥 New video detected: ${filePath}`);
-      const baseName = path.parse(filePath).name;
-      removeProcessedEntriesByBase(baseName);
-      const oldOutput = path.join(HLS_DIR, baseName);
-      if (fs.existsSync(oldOutput)) fs.rmSync(oldOutput, { recursive: true, force: true });
-      enqueueFileDebounced(filePath);
-    }
+  watcher.on("add", async (filePath) => {
+    if (!VIDEO_EXT.test(filePath)) return;
+    console.log(`📥 New video detected: ${filePath}`);
+    await processVideo(filePath);
   });
 
-  watcher.on("change", (filePath) => {
-    if (VIDEO_EXT.test(filePath)) {
-      console.log(`♻️ Video changed: ${filePath}`);
-      const baseName = path.parse(filePath).name;
-      removeProcessedEntriesByBase(baseName);
-      const outputDir = path.join(HLS_DIR, baseName);
-      if (fs.existsSync(outputDir)) fs.rmSync(outputDir, { recursive: true, force: true });
-      enqueueFileDebounced(filePath);
-    }
+  watcher.on("change", async (filePath) => {
+    if (!VIDEO_EXT.test(filePath)) return;
+    console.log(`♻️ Video modified or replaced: ${filePath}`);
+    await processVideo(filePath);
   });
 
   watcher.on("unlink", (filePath) => {
-    if (VIDEO_EXT.test(filePath)) {
-      console.log(`🗑️ Source video deleted: ${filePath}`);
-      const baseName = path.parse(filePath).name;
-      const outputDir = path.join(HLS_DIR, baseName);
-      if (fs.existsSync(outputDir)) fs.rmSync(outputDir, { recursive: true, force: true });
-      removeProcessedEntriesByBase(baseName);
-    }
+    if (!VIDEO_EXT.test(filePath)) return;
+    const baseName = path.parse(filePath).name;
+    removeOldHls(baseName);
   });
 
   watcher.on("error", (err) => console.error("⚠️ Watcher error:", err));
 
-  console.log("👀 Watcher started, monitoring uploads...");
+  console.log("👀 Watcher started — Monitoring uploads & DB for changes...");
+  setInterval(scanDbForChangedFiles, 1000);
 };
 
-console.log("👀 Starting video watcher...");
-console.log(`📂 Uploads dir: ${UPLOADS_DIR}`);
-console.log(`📂 HLS dir: ${HLS_DIR}`);
 startWatcher();
