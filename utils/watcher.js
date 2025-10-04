@@ -148,7 +148,12 @@ async function scanDbForChangedFiles() {
       const videoCols = cols.filter(c => /video/i.test(c.Field));
       if (videoCols.length === 0) continue;
 
+      // ✅ Skip tables without 'video_hls_path'
+      const hasHlsColumn = cols.some(c => c.Field === 'video_hls_path');
+      if (!hasHlsColumn) continue;
+
       for (const col of videoCols) {
+        // Only fetch videos with non-null path and null HLS
         const [records] = await pool.query(
           `SELECT * FROM ${table} WHERE ${col.Field} IS NOT NULL AND video_hls_path IS NULL`
         );
@@ -161,10 +166,12 @@ async function scanDbForChangedFiles() {
           const filePath = findFileByNameInsensitive(filename, UPLOADS_DIR);
           if (!filePath) continue;
 
-          const processedVideos = loadProcessedVideos();
+          const processedVideos = loadProcessedVideos(); // load your JSON of processed files
           if (!processedVideos.has(filePath)) {
             console.log(`🔄 DB-triggered video detected: ${filename}`);
             await processVideo(filePath);
+          } else {
+            console.log(`⏭️ Skipping already processed video: ${filename}`);
           }
         }
       }
