@@ -35,17 +35,41 @@ function removeProcessedEntriesByBase(baseName) {
 }
 
 // Wait until file is stable (fully uploaded)
-const waitForFileStable = async (filePath, interval = 2000, retries = 5) => {
-  let lastSize = fs.statSync(filePath).size;
-  for (let i = 0; i < retries; i++) {
-    await new Promise((r) => setTimeout(r, interval));
-    const newSize = fs.statSync(filePath).size;
-    if (newSize === lastSize) return true;
-    lastSize = newSize;
-  }
-  return false;
-};
+const waitForFileStable = async (filePath, interval = 3000, maxWaitMinutes = 60) => {
+  try {
+    if (!fs.existsSync(filePath)) return false;
 
+    const maxLoops = Math.floor((maxWaitMinutes * 60 * 1000) / interval);
+    let lastSize = fs.statSync(filePath).size;
+    let sameCount = 0;
+
+    for (let i = 0; i < maxLoops; i++) {
+      await new Promise((r) => setTimeout(r, interval));
+
+      if (!fs.existsSync(filePath)) return false;
+      const newSize = fs.statSync(filePath).size;
+
+      if (newSize === lastSize && newSize > 0) {
+        sameCount++;
+        if (sameCount >= 2) {
+          console.log(`✅ File stabilized after ${((i + 1) * interval) / 1000}s: ${filePath}`);
+          return true;
+        }
+      } else {
+        sameCount = 0; 
+      }
+
+      console.log(`⏳ Waiting... (${i + 1}/${maxLoops}) size changed ${lastSize} → ${newSize}`);
+      lastSize = newSize;
+    }
+
+    console.log(`⚠️ File did not stabilize within ${maxWaitMinutes} minutes: ${filePath}`);
+    return false;
+  } catch (err) {
+    console.error(`❌ Error checking file stability for ${filePath}:`, err.message);
+    return false;
+  }
+};
 // Convert video & update DB
 async function processVideo(filePath) {
   try {
