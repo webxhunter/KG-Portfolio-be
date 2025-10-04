@@ -7,7 +7,7 @@ import path from "path";
 import pool from "../db.js";
 import { VIDEO_EXT, isValidVideo, waitUntilStable } from "./helpers.js";
 import { findFileByNameInsensitive } from "./fileFinder.js";
-import convertToHls from "./hlsconvert.js"; 
+import convertToHls from "./hlsconvert.js";
 
 const PROJECT_ROOT = path.resolve(process.cwd());
 const UPLOADS_DIR = path.join(PROJECT_ROOT, "public/uploads");
@@ -18,6 +18,9 @@ let processedSet = new Set();
 const processingNow = new Set();
 let isScanning = false;
 
+// --------------------
+// Load / Save processed set
+// --------------------
 function loadProcessedSet() {
   try {
     if (!fs.existsSync(PROCESSED_JSON)) return new Set();
@@ -26,6 +29,7 @@ function loadProcessedSet() {
     return new Set();
   }
 }
+
 function saveProcessedSet() {
   try {
     fs.writeFileSync(PROCESSED_JSON, JSON.stringify([...processedSet], null, 2));
@@ -33,6 +37,7 @@ function saveProcessedSet() {
     console.error("⚠️ Failed to save processedVideos.json:", err.message || err);
   }
 }
+
 processedSet = loadProcessedSet();
 
 // --------------------
@@ -149,11 +154,12 @@ function startFsWatcher() {
 
   watcher.on("add", async filePath => {
     if (!VIDEO_EXT.test(filePath)) return;
+
     const rec = await findDbRecordForFilename(path.basename(filePath));
     if (!rec) return;
 
-    // New file upload triggers HLS
-    await processSingleFile(filePath, { dbTarget: { table: rec.table, id: rec.id }, isUpdate: !!rec.video_hls_path });
+    // New file upload triggers HLS immediately
+    await processSingleFile(filePath, { dbTarget: { table: rec.table, id: rec.id }, isUpdate: false });
   });
 
   watcher.on("unlink", filePath => {
@@ -168,7 +174,7 @@ function startFsWatcher() {
 }
 
 // --------------------
-// DB Watcher (for updated / renamed files)
+// DB Watcher (for updates / renamed files)
 // --------------------
 async function scanDbForUpdates() {
   if (isScanning) return;
@@ -187,17 +193,23 @@ async function scanDbForUpdates() {
         for (const rec of rows) {
           if (!rec.video_path || !VIDEO_EXT.test(rec.video_path)) continue;
 
-          // Check for HLS filename mismatch
           const originalBase = path.parse(rec.video_path).name;
           const currentHlsBase = rec.video_hls_path ? path.parse(rec.video_hls_path).name : null;
-
-          if (!currentHlsBase || originalBase === currentHlsBase) continue; // no change
 
           const filePath = findFileByNameInsensitive(path.basename(rec.video_path), UPLOADS_DIR);
           if (!filePath) continue;
 
-          // mismatch detected → regenerate HLS for this file only
-          await processSingleFile(filePath, { dbTarget: { table: rec.table, id: rec.id }, isUpdate: true });
+          let isUpdate = false;
+          if (!currentHlsBase) {
+            console.log(`🔄 DB-triggered NEW video: ${path.basename(filePath)} (table: ${table}, col: ${vc.Field})`);
+          } else if (originalBase !== currentHlsBase) {
+            console.log(`🔄 DB-triggered UPDATE (filename mismatch): ${path.basename(filePath)}`);
+            isUpdate = true;
+          } else {
+            continue; // already processed correctly
+          }
+
+          await processSingleFile(filePath, { dbTarget: { table: rec.table, id: rec.id }, isUpdate });
         }
       }
     }
@@ -208,9 +220,13 @@ async function scanDbForUpdates() {
   }
 }
 
+// --------------------
+// Start watcher
+// --------------------
 console.log("👀 Starting watcher (FS + DB)...");
 console.log("📂 Uploads:", UPLOADS_DIR);
 console.log("📂 HLS:", HLS_DIR);
 
 startFsWatcher();
 setInterval(scanDbForUpdates, 1000);
+
