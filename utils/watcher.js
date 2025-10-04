@@ -265,7 +265,7 @@ async function scanDbForChangedFiles() {
           }
 
           // Case B: processed exists but DB hls path is different → treat as update
-          if (alreadyProcessed && rec.video_hls_path !== expectedHls) {
+          if (alreadyProcessed && rec.video_hls_path && rec.video_hls_path !== expectedHls) {
             console.log(`♻️ DB update detected for: ${filename} (table: ${table}) — queued for regen`);
             // queue for update: pass dbTarget when actually processing
             pendingUpdates.add(filePath);
