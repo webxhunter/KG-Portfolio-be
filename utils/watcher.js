@@ -280,12 +280,14 @@ async function scanDbForUpdates() {
 
   try {
     const [tables] = await pool.query("SHOW TABLES");
+
     for (const t of tables) {
       const table = Object.values(t)[0];
       const [cols] = await pool.query(`SHOW COLUMNS FROM \`${table}\``);
       if (!cols.some(c => c.Field === "video_hls_path")) continue;
 
       const videoCols = cols.filter(c => /video/i.test(c.Field));
+
       for (const vc of videoCols) {
         const [rows] = await pool.query(`
           SELECT id, \`${vc.Field}\` AS video_path, video_hls_path
@@ -304,12 +306,13 @@ async function scanDbForUpdates() {
           const filePath = findFileByNameInsensitive(fileName, UPLOADS_DIR);
           if (!filePath) continue;
 
-          // ✅ Skip if already processed (prevents reconvert & repeated logs)
-          if (processedSet.has(fileName)) {
-            console.log(`ℹ️ Skipping ${fileName} — already processed and DB updated`);
+          // ✅ Skip if already processed AND DB HLS matches
+          if (processedSet.has(fileName) && currentHlsBase === originalBase) {
+            console.log(`ℹ️ Skipping ${fileName} — already processed and DB up-to-date`);
             continue;
           }
 
+          // Only push if HLS mismatch or not yet processed
           if (currentHlsBase && originalBase !== currentHlsBase) {
             console.log(`🔄 DB-triggered UPDATE (filename mismatch): ${fileName}`);
             processingQueue.push({
