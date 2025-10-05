@@ -187,7 +187,7 @@ function startFsWatcher() {
     ignored: /(^|[\/\\])\../,
     persistent: true,
     depth: 10,
-    ignoreInitial: false,
+    ignoreInitial: true, 
     awaitWriteFinish: {
       stabilityThreshold: 5000,
       pollInterval: 1000
@@ -200,7 +200,6 @@ function startFsWatcher() {
 
     console.log(`📸 FS detected new upload: ${filename}`);
 
-    // Queue file for processing with DB retry
     processingQueue.push({
       filePath,
       options: {},
@@ -220,7 +219,6 @@ function startFsWatcher() {
 
   console.log("👀 FS watcher started");
 }
-
 // --------------------
 // DB Watcher (for updates / renamed files)
 // --------------------
