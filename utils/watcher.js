@@ -157,8 +157,6 @@ function startFsWatcher() {
 
     const rec = await findDbRecordForFilename(path.basename(filePath));
     if (!rec) return;
-
-    // New file upload triggers HLS immediately
     await processSingleFile(filePath, { dbTarget: { table: rec.table, id: rec.id }, isUpdate: false });
   });
 
@@ -189,7 +187,14 @@ async function scanDbForUpdates() {
 
       const videoCols = cols.filter(c => /video/i.test(c.Field));
       for (const vc of videoCols) {
-        const [rows] = await pool.query(`SELECT id, \`${vc.Field}\` AS video_path, video_hls_path FROM \`${table}\``);
+        const [rows] = await pool.query(`
+          SELECT id, \`${vc.Field}\` AS video_path, video_hls_path
+          FROM \`${table}\`
+          WHERE video_hls_path IS NOT NULL
+            AND video_hls_path <> CONCAT('/hls/', SUBSTRING_INDEX(SUBSTRING_INDEX(\`${vc.Field}\`, '/', -1), '.', 1), '.m3u8')
+          LIMIT 50
+        `);
+
         for (const rec of rows) {
           if (!rec.video_path || !VIDEO_EXT.test(rec.video_path)) continue;
 
@@ -199,17 +204,15 @@ async function scanDbForUpdates() {
           const filePath = findFileByNameInsensitive(path.basename(rec.video_path), UPLOADS_DIR);
           if (!filePath) continue;
 
-          let isUpdate = false;
-          if (!currentHlsBase) {
-            console.log(`🔄 DB-triggered NEW video: ${path.basename(filePath)} (table: ${table}, col: ${vc.Field})`);
-          } else if (originalBase !== currentHlsBase) {
+          // ✅ Mismatch found → rename/update trigger
+          if (currentHlsBase && originalBase !== currentHlsBase) {
             console.log(`🔄 DB-triggered UPDATE (filename mismatch): ${path.basename(filePath)}`);
-            isUpdate = true;
-          } else {
-            continue; // already processed correctly
-          }
 
-          await processSingleFile(filePath, { dbTarget: { table: rec.table, id: rec.id }, isUpdate });
+            await processSingleFile(filePath, {
+              dbTarget: { table, id: rec.id },
+              isUpdate: true
+            });
+          }
         }
       }
     }
@@ -219,7 +222,6 @@ async function scanDbForUpdates() {
     isScanning = false;
   }
 }
-
 // --------------------
 // Start watcher
 // --------------------
@@ -228,5 +230,4 @@ console.log("📂 Uploads:", UPLOADS_DIR);
 console.log("📂 HLS:", HLS_DIR);
 
 startFsWatcher();
-setInterval(scanDbForUpdates, 1000);
-
+setInterval(scanDbForUpdates, 2000);
