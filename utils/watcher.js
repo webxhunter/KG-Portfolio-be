@@ -146,10 +146,16 @@ async function processSingleFile(filePath, options = {}) {
       }
     }
 
+    // ✅ Only reset processedSet and remove HLS if update really needs it
     if (options.isUpdate) {
-      removeOldHls(baseName);
-      processedSet.delete(filename);
-      saveProcessedSet();
+      if (!processedSet.has(filename)) {
+        console.log(`ℹ️ Update detected for ${filename}, removing old HLS folder`);
+        removeOldHls(baseName);
+        processedSet.delete(filename);
+        saveProcessedSet();
+      } else {
+        console.log(`ℹ️ Update detected for ${filename} but already processed, skipping old HLS removal`);
+      }
     }
 
     fs.mkdirSync(outputDir, { recursive: true });
@@ -183,6 +189,7 @@ async function processSingleFile(filePath, options = {}) {
     console.error("❌ processSingleFile error:", err.message || err);
   }
 }
+
 // --------------------
 // Queue processor (1 file at a time with DB retry)
 // --------------------
@@ -223,7 +230,7 @@ function startFsWatcher() {
     }
   });
 
-    watcher.on("add", async (filePath) => {
+  watcher.on("add", async (filePath) => {
     if (!VIDEO_EXT.test(filePath)) return;
     const filename = path.basename(filePath);
 
@@ -239,6 +246,7 @@ function startFsWatcher() {
 
     processQueue();
   });
+
   watcher.on("unlink", (filePath) => {
     if (!VIDEO_EXT.test(filePath)) return;
     removeOldHls(path.parse(filePath).name);
@@ -285,6 +293,11 @@ async function scanDbForUpdates() {
           if (!filePath) continue;
 
           if (currentHlsBase && originalBase !== currentHlsBase) {
+            if (processedSet.has(path.basename(filePath))) {
+              console.log(`ℹ️ Skipping ${path.basename(filePath)} — already processed and DB updated`);
+              continue;
+            }
+
             console.log(`🔄 DB-triggered UPDATE (filename mismatch): ${path.basename(filePath)}`);
             processingQueue.push({
               filePath,
