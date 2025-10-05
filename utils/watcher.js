@@ -123,7 +123,7 @@ async function waitForDbRecord(filePath, retries = 5) {
 
 // --------------------
 // Process single file
-// --------------------
+// -------------------
 async function processSingleFile(filePath, options = {}) {
   const filename = path.basename(filePath);
   const baseName = path.parse(filePath).name;
@@ -147,6 +147,8 @@ async function processSingleFile(filePath, options = {}) {
     }
 
     // ✅ Only reset processedSet and remove HLS if update really needs it
+    let shouldConvert = true;
+
     if (options.isUpdate) {
       if (!processedSet.has(filename)) {
         console.log(`ℹ️ Update detected for ${filename}, removing old HLS folder`);
@@ -155,8 +157,12 @@ async function processSingleFile(filePath, options = {}) {
         saveProcessedSet();
       } else {
         console.log(`ℹ️ Update detected for ${filename} but already processed, skipping old HLS removal`);
+        shouldConvert = false; // <-- don't reconvert
       }
     }
+
+    // Only proceed if conversion is needed
+    if (!shouldConvert) return;
 
     fs.mkdirSync(outputDir, { recursive: true });
     console.log(`🎬 Starting HLS conversion for: ${filename} ...`);
@@ -189,7 +195,6 @@ async function processSingleFile(filePath, options = {}) {
     console.error("❌ processSingleFile error:", err.message || err);
   }
 }
-
 // --------------------
 // Queue processor (1 file at a time with DB retry)
 // --------------------
@@ -286,19 +291,20 @@ async function scanDbForUpdates() {
         for (const rec of rows) {
           if (!rec.video_path || !VIDEO_EXT.test(rec.video_path)) continue;
 
-          const originalBase = path.parse(rec.video_path).name;
+          const fileName = path.basename(rec.video_path);
+          const originalBase = path.parse(fileName).name;
           const currentHlsBase = rec.video_hls_path ? path.parse(rec.video_hls_path).name : null;
-
-          const filePath = findFileByNameInsensitive(path.basename(rec.video_path), UPLOADS_DIR);
+          const filePath = findFileByNameInsensitive(fileName, UPLOADS_DIR);
           if (!filePath) continue;
 
-          if (currentHlsBase && originalBase !== currentHlsBase) {
-            if (processedSet.has(path.basename(filePath))) {
-              console.log(`ℹ️ Skipping ${path.basename(filePath)} — already processed and DB updated`);
-              continue;
-            }
+          // ✅ Skip if already processed (prevents reconvert & repeated logs)
+          if (processedSet.has(fileName)) {
+            console.log(`ℹ️ Skipping ${fileName} — already processed and DB updated`);
+            continue;
+          }
 
-            console.log(`🔄 DB-triggered UPDATE (filename mismatch): ${path.basename(filePath)}`);
+          if (currentHlsBase && originalBase !== currentHlsBase) {
+            console.log(`🔄 DB-triggered UPDATE (filename mismatch): ${fileName}`);
             processingQueue.push({
               filePath,
               options: { dbTarget: { table, id: rec.id }, isUpdate: true }
@@ -314,7 +320,6 @@ async function scanDbForUpdates() {
     isScanning = false;
   }
 }
-
 // --------------------
 // Start watcher
 // --------------------
