@@ -25,7 +25,8 @@ let isScanning = false;
 function loadProcessedSet() {
   try {
     if (!fs.existsSync(PROCESSED_JSON)) return new Set();
-    return new Set(JSON.parse(fs.readFileSync(PROCESSED_JSON, "utf-8")));
+    // normalize to lowercase
+    return new Set(JSON.parse(fs.readFileSync(PROCESSED_JSON, "utf-8")).map(f => f.toLowerCase()));
   } catch {
     return new Set();
   }
@@ -137,7 +138,6 @@ async function processSingleFile(filePath, options = {}) {
     const valid = await isValidVideo(filePath);
     if (!valid) return;
 
-    // ✅ Skip DB check for new uploads if DB already has latest HLS
     if (!options.isUpdate && typeof getDbPathForFile === "function") {
       const dbPath = await getDbPathForFile(filename);
       if (dbPath && dbPath.includes(filenameWithoutExt)) {
@@ -146,22 +146,20 @@ async function processSingleFile(filePath, options = {}) {
       }
     }
 
-    // ✅ Only reset processedSet and remove HLS if update really needs it
     let shouldConvert = true;
 
     if (options.isUpdate) {
-      if (!processedSet.has(filename)) {
+      if (!processedSet.has(filename.toLowerCase())) {
         console.log(`ℹ️ Update detected for ${filename}, removing old HLS folder`);
         removeOldHls(baseName);
-        processedSet.delete(filename);
+        processedSet.delete(filename.toLowerCase());
         saveProcessedSet();
       } else {
         console.log(`ℹ️ Update detected for ${filename} but already processed, skipping old HLS removal`);
-        shouldConvert = false; // <-- don't reconvert
+        shouldConvert = false;
       }
     }
 
-    // Only proceed if conversion is needed
     if (!shouldConvert) return;
 
     fs.mkdirSync(outputDir, { recursive: true });
@@ -170,7 +168,6 @@ async function processSingleFile(filePath, options = {}) {
 
     const hlsRelative = `/hls/${baseName}.m3u8`;
 
-    // Update DB only for updates
     if (options.dbTarget) {
       console.log(`📝 Updating DB for ${filename} ...`);
       await updateDbRecordHls(options.dbTarget.table, options.dbTarget.id, hlsRelative);
@@ -187,7 +184,7 @@ async function processSingleFile(filePath, options = {}) {
       }
     }
 
-    processedSet.add(filename);
+    processedSet.add(filename.toLowerCase());
     saveProcessedSet();
     console.log(`🎬 Conversion completed successfully: ${filename}`);
     console.log(`🏁 Done: ${filename} → HLS created & DB updated`);
@@ -195,6 +192,7 @@ async function processSingleFile(filePath, options = {}) {
     console.error("❌ processSingleFile error:", err.message || err);
   }
 }
+
 // --------------------
 // Queue processor (1 file at a time with DB retry)
 // --------------------
@@ -228,42 +226,38 @@ function startFsWatcher() {
     ignored: /(^|[\/\\])\../,
     persistent: true,
     depth: 10,
-    ignoreInitial: true, 
-    awaitWriteFinish: {
-      stabilityThreshold: 5000,
-      pollInterval: 1000
+    ignoreInitial: true,
+    awaitWriteFinish: { stabilityThreshold: 5000, pollInterval: 1000 }
+  });
+
+  watcher.on("add", async (filePath) => {
+    if (!VIDEO_EXT.test(filePath)) return;
+    const filename = path.basename(filePath);
+
+    const dbPath = typeof getDbPathForFile === "function"
+      ? await getDbPathForFile(filename)
+      : null;
+    const filenameWithoutExt = path.parse(filename).name;
+
+    if (dbPath && dbPath.includes(filenameWithoutExt)) {
+      console.log(`ℹ️ Skipping ${filename} — DB already has latest HLS, no conversion needed`);
+      return;
     }
+
+    const normFileName = filename.toLowerCase();
+    processedSet.add(normFileName); 
+    saveProcessedSet();
+
+    processingQueue.push({ filePath, options: {}, dbRetries: 5 });
+    console.log(`📦 Queued for conversion: ${filename}`);
+    processQueue();
   });
-
-watcher.on("add", async (filePath) => {
-  if (!VIDEO_EXT.test(filePath)) return;
-  const filename = path.basename(filePath);
-
-  const dbPath = typeof getDbPathForFile === "function" 
-                 ? await getDbPathForFile(filename) 
-                 : null;
-  const filenameWithoutExt = path.parse(filename).name;
-
-  // ✅ Skip if DB already has correct HLS
-  if (dbPath && dbPath.includes(filenameWithoutExt)) {
-    console.log(`ℹ️ Skipping ${filename} — DB already has latest HLS, no conversion needed`);
-    return;
-  }
-
-  processingQueue.push({
-    filePath,
-    options: {},
-    dbRetries: 5
-  });
-  console.log(`📦 Queued for conversion: ${filename}`);
-  processQueue();
-});
 
   watcher.on("unlink", (filePath) => {
     if (!VIDEO_EXT.test(filePath)) return;
     removeOldHls(path.parse(filePath).name);
     const filename = path.basename(filePath);
-    processedSet.delete(filename);
+    processedSet.delete(filename.toLowerCase());
     saveProcessedSet();
     console.log(`🗑️ File deleted: ${filename}`);
   });
@@ -287,7 +281,6 @@ async function scanDbForUpdates() {
       if (!cols.some(c => c.Field === "video_hls_path")) continue;
 
       const videoCols = cols.filter(c => /video/i.test(c.Field));
-
       for (const vc of videoCols) {
         const [rows] = await pool.query(`
           SELECT id, \`${vc.Field}\` AS video_path, video_hls_path
@@ -306,30 +299,31 @@ async function scanDbForUpdates() {
           const filePath = findFileByNameInsensitive(fileName, UPLOADS_DIR);
           if (!filePath) continue;
 
-          // ✅ Skip if already processed AND DB HLS matches
-          if (processedSet.has(fileName) && currentHlsBase === originalBase) {
+          const normFileName = fileName.toLowerCase();
+          if (processedSet.has(normFileName) && currentHlsBase?.toLowerCase() === originalBase.toLowerCase()) {
             console.log(`ℹ️ Skipping ${fileName} — already processed and DB up-to-date`);
             continue;
           }
-
-          // Only push if HLS mismatch or not yet processed
-          if (currentHlsBase && originalBase !== currentHlsBase) {
+          if (!processedSet.has(normFileName) || (currentHlsBase && originalBase.toLowerCase() !== currentHlsBase.toLowerCase())) {
             console.log(`🔄 DB-triggered UPDATE (filename mismatch): ${fileName}`);
+            processedSet.add(normFileName); 
             processingQueue.push({
               filePath,
               options: { dbTarget: { table, id: rec.id }, isUpdate: true }
             });
-            processQueue();
           }
         }
       }
     }
+
+    if (processingQueue.length > 0) processQueue(); 
   } catch (err) {
     console.error("⚠️ DB scan error:", err.message || err);
   } finally {
     isScanning = false;
   }
 }
+
 // --------------------
 // Start watcher
 // --------------------
