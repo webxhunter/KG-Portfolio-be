@@ -15,7 +15,8 @@ const HLS_DIR = path.join(PROJECT_ROOT, "public/hls");
 const PROCESSED_JSON = path.join(PROJECT_ROOT, "processedVideos.json");
 
 let processedSet = new Set();
-const processingNow = new Set();
+const processingQueue = [];
+let isProcessing = false;
 let isScanning = false;
 
 // --------------------
@@ -107,13 +108,24 @@ async function updateDbRecordHls(table, id, hlsPath) {
 }
 
 // --------------------
+// Wait for DB record with retries
+// --------------------
+async function waitForDbRecord(filePath, retries = 5) {
+  const filename = path.basename(filePath);
+  let rec = null;
+  for (let i = 0; i < retries; i++) {
+    rec = await findDbRecordForFilename(filename);
+    if (rec) return rec;
+    await new Promise(r => setTimeout(r, 1000)); 
+  }
+  return null;
+}
+
+// --------------------
 // Process single file
 // --------------------
 async function processSingleFile(filePath, options = {}) {
   const filename = path.basename(filePath);
-  if (processingNow.has(filename)) return;
-
-  processingNow.add(filename);
   const baseName = path.parse(filePath).name;
   const outputDir = path.join(HLS_DIR, baseName);
 
@@ -141,42 +153,69 @@ async function processSingleFile(filePath, options = {}) {
     console.log(`🏁 Done: ${filename} → HLS created & DB updated`);
   } catch (err) {
     console.error("❌ processSingleFile error:", err.message || err);
-  } finally {
-    processingNow.delete(filename);
   }
+}
+
+// --------------------
+// Queue processor (1 file at a time with DB retry)
+// --------------------
+async function processQueue() {
+  if (isProcessing) return;
+  isProcessing = true;
+
+  while (processingQueue.length > 0) {
+    const task = processingQueue.shift();
+
+    // Wait for DB record if not present
+    let dbTarget = task.options.dbTarget || null;
+    if (!dbTarget && task.dbRetries) {
+      const rec = await waitForDbRecord(task.filePath, task.dbRetries);
+      if (rec) dbTarget = { table: rec.table, id: rec.id };
+    }
+
+    await processSingleFile(task.filePath, { ...task.options, dbTarget });
+  }
+
+  isProcessing = false;
 }
 
 // --------------------
 // FS Watcher (for new uploads)
 // --------------------
 function startFsWatcher() {
-  const watcher = chokidar.watch(UPLOADS_DIR, { ignored: /(^|[\/\\])\../, persistent: true, depth: 2, ignoreInitial: true });
+  const watcher = chokidar.watch(UPLOADS_DIR, {
+    ignored: /(^|[\/\\])\../,
+    persistent: true,
+    depth: 10,
+    ignoreInitial: false,
+    awaitWriteFinish: {
+      stabilityThreshold: 5000,
+      pollInterval: 1000
+    }
+  });
 
-  watcher.on("add", async filePath => {
-  if (!VIDEO_EXT.test(filePath)) return;
+  watcher.on("add", async (filePath) => {
+    if (!VIDEO_EXT.test(filePath)) return;
+    const filename = path.basename(filePath);
 
-  const filename = path.basename(filePath);
-  let rec = null;
-  for (let i = 0; i < 5; i++) {
-    rec = await findDbRecordForFilename(filename);
-    if (rec) break;
-    await new Promise(r => setTimeout(r, 1000)); 
-  }
+    console.log(`📸 FS detected new upload: ${filename}`);
 
-  if (!rec) {
-    console.log(`⚠️ No DB record yet for ${filename}, skipping.`);
-    return;
-  }
+    // Queue file for processing with DB retry
+    processingQueue.push({
+      filePath,
+      options: {},
+      dbRetries: 5
+    });
+    processQueue();
+  });
 
-  console.log(`📸 FS detected new upload: ${filename}`);
-  await processSingleFile(filePath, { dbTarget: { table: rec.table, id: rec.id }, isUpdate: false });
-});
-  watcher.on("unlink", filePath => {
+  watcher.on("unlink", (filePath) => {
     if (!VIDEO_EXT.test(filePath)) return;
     removeOldHls(path.parse(filePath).name);
     const filename = path.basename(filePath);
     processedSet.delete(filename);
     saveProcessedSet();
+    console.log(`🗑️ File deleted: ${filename}`);
   });
 
   console.log("👀 FS watcher started");
@@ -215,14 +254,13 @@ async function scanDbForUpdates() {
           const filePath = findFileByNameInsensitive(path.basename(rec.video_path), UPLOADS_DIR);
           if (!filePath) continue;
 
-          // ✅ Mismatch found → rename/update trigger
           if (currentHlsBase && originalBase !== currentHlsBase) {
             console.log(`🔄 DB-triggered UPDATE (filename mismatch): ${path.basename(filePath)}`);
-
-            await processSingleFile(filePath, {
-              dbTarget: { table, id: rec.id },
-              isUpdate: true
+            processingQueue.push({
+              filePath,
+              options: { dbTarget: { table, id: rec.id }, isUpdate: true }
             });
+            processQueue();
           }
         }
       }
@@ -233,6 +271,7 @@ async function scanDbForUpdates() {
     isScanning = false;
   }
 }
+
 // --------------------
 // Start watcher
 // --------------------
