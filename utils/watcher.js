@@ -14,11 +14,11 @@ const UPLOADS_DIR = path.join(PROJECT_ROOT, "public/uploads");
 const HLS_DIR = path.join(PROJECT_ROOT, "public/hls");
 const PROCESSED_JSON = path.join(PROJECT_ROOT, "processedVideos.json");
 
-let processedMap = new Map(); 
+let processedMap = new Map();
 const processingQueue = [];
 let isProcessing = false;
 let isScanning = false;
-const currentlyProcessingSet = new Set(); // 🔒 lock for files being converted
+const currentlyProcessingSet = new Set();
 
 // --------------------
 // Load / Save processed map
@@ -55,7 +55,7 @@ function removeOldHls(baseName) {
 }
 
 // --------------------
-// Adaptive wait for file stability
+// Wait until file is stable
 // --------------------
 async function waitUntilStableAdaptive(filePath, maxWaitMs = 60 * 60 * 1000) {
   if (!fs.existsSync(filePath)) return false;
@@ -65,7 +65,7 @@ async function waitUntilStableAdaptive(filePath, maxWaitMs = 60 * 60 * 1000) {
 }
 
 // --------------------
-// Find DB record for a filename
+// Find DB record
 // --------------------
 async function findDbRecordForFilename(filename) {
   try {
@@ -131,11 +131,7 @@ async function processSingleFile(filePath, options = {}) {
   const filenameLower = filename.toLowerCase();
   const baseName = path.parse(filePath).name;
 
-  // 🔒 Skip if file is currently processing
-  if (currentlyProcessingSet.has(filenameLower)) {
-    console.log(`⏳ Skipping ${filename} — currently being processed`);
-    return;
-  }
+  if (currentlyProcessingSet.has(filenameLower)) return;
   currentlyProcessingSet.add(filenameLower);
 
   try {
@@ -148,48 +144,39 @@ async function processSingleFile(filePath, options = {}) {
     const stats = fs.statSync(filePath);
     const prev = processedMap.get(filenameLower);
 
-    if (prev && prev.size === stats.size && prev.timestamp === stats.mtimeMs && !options.isUpdate) {
+    if (prev && prev.size === stats.size && prev.timestamp === stats.mtimeMs) {
       console.log(`ℹ️ Skipping ${filename} — already processed and DB up-to-date`);
       return;
     }
 
-    // For updates
-    if (options.isUpdate) {
-      if (!prev || prev.size !== stats.size) {
-        console.log(`ℹ️ Update detected for ${filename}, removing old HLS folder`);
-        removeOldHls(baseName);
-        processedMap.delete(filenameLower);
-        saveProcessedMap();
-      } else {
-        console.log(`ℹ️ Update detected for ${filename} but already processed, skipping old HLS removal`);
-        currentlyProcessingSet.delete(filenameLower);
-        return;
-      }
+    if (options.isUpdate && prev && prev.size === stats.size) {
+      console.log(`ℹ️ Update detected for ${filename} but already processed, skipping old HLS removal`);
+    } else if (options.isUpdate) {
+      console.log(`ℹ️ Update detected for ${filename}, removing old HLS folder`);
+      removeOldHls(baseName);
+      processedMap.delete(filenameLower);
+      saveProcessedMap();
     }
 
-    const outputDir = path.join(HLS_DIR, baseName);
-    fs.mkdirSync(outputDir, { recursive: true });
-
+    fs.mkdirSync(path.join(HLS_DIR, baseName), { recursive: true });
     console.log(`🎬 Starting HLS conversion for: ${filename} ...`);
-    await convertToHls(filePath, outputDir, baseName);
+    await convertToHls(filePath, path.join(HLS_DIR, baseName), baseName);
 
     const hlsRelative = `/hls/${baseName}.m3u8`;
 
     if (options.dbTarget) {
       console.log(`📝 Updating DB for ${filename} ...`);
       await updateDbRecordHls(options.dbTarget.table, options.dbTarget.id, hlsRelative);
-      await new Promise(res => setTimeout(res, 1000));
     }
 
     processedMap.set(filenameLower, { size: stats.size, timestamp: stats.mtimeMs });
     saveProcessedMap();
 
     console.log(`🎬 Conversion completed successfully: ${filename}`);
-    console.log(`🏁 Done: ${filename} → HLS created & DB updated`);
   } catch (err) {
     console.error("❌ processSingleFile error:", err.message || err);
   } finally {
-    currentlyProcessingSet.delete(filenameLower); // 🔓 release lock
+    currentlyProcessingSet.delete(filenameLower);
   }
 }
 
@@ -202,11 +189,13 @@ async function processQueue() {
 
   while (processingQueue.length > 0) {
     const task = processingQueue.shift();
+
     let dbTarget = task.options.dbTarget || null;
     if (!dbTarget && task.dbRetries) {
       const rec = await waitForDbRecord(task.filePath, task.dbRetries);
       if (rec) dbTarget = { table: rec.table, id: rec.id };
     }
+
     await processSingleFile(task.filePath, { ...task.options, dbTarget });
   }
 
@@ -229,10 +218,12 @@ function startFsWatcher() {
   });
 
   watcher.on("add", async (filePath) => {
+    const filenameLower = path.basename(filePath).toLowerCase();
     if (!VIDEO_EXT.test(filePath)) return;
-    const filename = path.basename(filePath);
+    if (currentlyProcessingSet.has(filenameLower) || processingQueue.some(t => t.filePath && path.basename(t.filePath).toLowerCase() === filenameLower)) return;
+
     processingQueue.push({ filePath, options: {}, dbRetries: 5 });
-    console.log(`📦 Queued for conversion: ${filename}`);
+    console.log(`📦 Queued for conversion: ${path.basename(filePath)}`);
     processQueue();
   });
 
@@ -278,19 +269,15 @@ async function scanDbForUpdates() {
           if (!rec.video_path || !VIDEO_EXT.test(rec.video_path)) continue;
 
           const fileName = path.basename(rec.video_path);
-          const originalBase = path.parse(fileName).name;
-          const currentHlsBase = rec.video_hls_path ? path.parse(rec.video_hls_path).name : null;
-          const filePath = findFileByNameInsensitive(fileName, UPLOADS_DIR);
-          if (!filePath) continue;
-
           const filenameLower = fileName.toLowerCase();
-          const stats = fs.existsSync(filePath) ? fs.statSync(filePath) : null;
-          const prev = processedMap.get(filenameLower);
 
-          if (prev && currentHlsBase === originalBase && prev.size === stats?.size) {
-            console.log(`ℹ️ Skipping ${fileName} — already processed and DB up-to-date`);
+          if (currentlyProcessingSet.has(filenameLower) || processingQueue.some(t => t.filePath && path.basename(t.filePath).toLowerCase() === filenameLower)) {
+            console.log(`⏳ Skipping DB queue for ${fileName} — already processing or queued`);
             continue;
           }
+
+          const filePath = findFileByNameInsensitive(fileName, UPLOADS_DIR);
+          if (!filePath) continue;
 
           console.log(`🔄 DB-triggered UPDATE (filename mismatch): ${fileName}`);
           processingQueue.push({
