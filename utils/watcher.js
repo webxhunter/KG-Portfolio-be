@@ -116,7 +116,7 @@ async function waitForDbRecord(filePath, retries = 5) {
   for (let i = 0; i < retries; i++) {
     rec = await findDbRecordForFilename(filename);
     if (rec) return rec;
-    await new Promise(r => setTimeout(r, 1000)); 
+    await new Promise(r => setTimeout(r, 1000));
   }
   return null;
 }
@@ -165,8 +165,7 @@ async function processQueue() {
 
   while (processingQueue.length > 0) {
     const task = processingQueue.shift();
-    const filename = path.basename(task.filePath);
-    if (processedSet.has(filename)) continue;
+
     let dbTarget = task.options.dbTarget || null;
     if (!dbTarget && task.dbRetries) {
       const rec = await waitForDbRecord(task.filePath, task.dbRetries);
@@ -180,22 +179,26 @@ async function processQueue() {
 }
 
 // --------------------
-// FS Watcher (for new uploads)
+// FS Watcher (PM2-safe)
 // --------------------
 function startFsWatcher() {
+  if (global.fsWatcherStarted) return;
+  global.fsWatcherStarted = true;
+
   const watcher = chokidar.watch(UPLOADS_DIR, {
     ignored: /(^|[\/\\])\../,
     persistent: true,
     depth: 10,
     ignoreInitial: true, 
+    awaitWriteFinish: {
+      stabilityThreshold: 5000,
+      pollInterval: 1000
+    }
   });
 
   watcher.on("add", async (filePath) => {
     if (!VIDEO_EXT.test(filePath)) return;
     const filename = path.basename(filePath);
-    if (processedSet.has(filename) || processingQueue.some(t => t.filePath === filePath)) {
-      return;
-    }
 
     console.log(`📸 FS detected new upload: ${filename}`);
 
@@ -204,7 +207,6 @@ function startFsWatcher() {
       options: {},
       dbRetries: 5
     });
-
     processQueue();
   });
 
@@ -280,3 +282,4 @@ console.log("📂 HLS:", HLS_DIR);
 
 startFsWatcher();
 setInterval(scanDbForUpdates, 2000);
+
