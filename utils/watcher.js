@@ -18,7 +18,7 @@ let processedMap = new Map();
 const processingQueue = [];
 let isProcessing = false;
 let isScanning = false;
-const currentlyProcessingSet = new Set();
+const currentlyProcessingSet = new Set(); // starts empty on restart
 
 // --------------------
 // Load / Save processed map
