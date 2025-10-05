@@ -130,11 +130,19 @@ async function processSingleFile(filePath, options = {}) {
   const outputDir = path.join(HLS_DIR, baseName);
 
   try {
-    const stable = await waitUntilStableAdaptive(filePath);
+    const stable = await waitUntilStable(filePath);
     if (!stable) return;
 
     const valid = await isValidVideo(filePath);
     if (!valid) return;
+
+    // ✅ Skip if DB already has correct HLS entry
+    const dbPath = await getDbPathForFile(filename);
+    const filenameWithoutExt = path.parse(filename).name;
+    if (dbPath && dbPath.includes(filenameWithoutExt)) {
+      console.log(`✅ Skipping ${filename} — DB already matches latest HLS`);
+      return;
+    }
 
     if (options.isUpdate) {
       removeOldHls(baseName);
@@ -143,12 +151,11 @@ async function processSingleFile(filePath, options = {}) {
     }
 
     fs.mkdirSync(outputDir, { recursive: true });
-        console.log(`🎬 Starting HLS conversion for: ${filename} ...`);
+    console.log(`🎬 Starting HLS conversion for: ${filename} ...`);
     await convertToHls(filePath, outputDir, baseName);
 
     const hlsRelative = `/hls/${baseName}.m3u8`;
 
-    // ✅ Update DB and recheck (for update cases only)
     if (options.dbTarget) {
       console.log(`📝 Updating DB for ${filename} ...`);
       await updateDbRecordHls(options.dbTarget.table, options.dbTarget.id, hlsRelative);
@@ -164,6 +171,7 @@ async function processSingleFile(filePath, options = {}) {
         console.log(`⚠️ DB still not matching for ${filename}, will check again next scan.`);
       }
     }
+
     processedSet.add(filename);
     saveProcessedSet();
     console.log(`🎬 Conversion completed successfully: ${filename}`);
@@ -172,7 +180,6 @@ async function processSingleFile(filePath, options = {}) {
     console.error("❌ processSingleFile error:", err.message || err);
   }
 }
-
 // --------------------
 // Queue processor (1 file at a time with DB retry)
 // --------------------
@@ -301,4 +308,3 @@ console.log("📂 HLS:", HLS_DIR);
 
 startFsWatcher();
 setInterval(scanDbForUpdates, 2000);
-
