@@ -143,13 +143,30 @@ async function processSingleFile(filePath, options = {}) {
     }
 
     fs.mkdirSync(outputDir, { recursive: true });
+        console.log(`🎬 Starting HLS conversion for: ${filename} ...`);
     await convertToHls(filePath, outputDir, baseName);
 
     const hlsRelative = `/hls/${baseName}.m3u8`;
-    if (options.dbTarget) await updateDbRecordHls(options.dbTarget.table, options.dbTarget.id, hlsRelative);
 
+    // ✅ Update DB and recheck (for update cases only)
+    if (options.dbTarget) {
+      console.log(`📝 Updating DB for ${filename} ...`);
+      await updateDbRecordHls(options.dbTarget.table, options.dbTarget.id, hlsRelative);
+      await new Promise(res => setTimeout(res, 1000));
+      const [rows] = await pool.query(
+        `SELECT video_hls_path FROM \`${options.dbTarget.table}\` WHERE id = ? LIMIT 1`,
+        [options.dbTarget.id]
+      );
+
+      if (rows.length && rows[0].video_hls_path === hlsRelative) {
+        console.log(`✅ Verified DB updated correctly for ${filename}, no further reprocessing needed.`);
+      } else {
+        console.log(`⚠️ DB still not matching for ${filename}, will check again next scan.`);
+      }
+    }
     processedSet.add(filename);
     saveProcessedSet();
+    console.log(`🎬 Conversion completed successfully: ${filename}`);
     console.log(`🏁 Done: ${filename} → HLS created & DB updated`);
   } catch (err) {
     console.error("❌ processSingleFile error:", err.message || err);
@@ -196,20 +213,22 @@ function startFsWatcher() {
     }
   });
 
-  watcher.on("add", async (filePath) => {
+    watcher.on("add", async (filePath) => {
     if (!VIDEO_EXT.test(filePath)) return;
     const filename = path.basename(filePath);
 
     console.log(`📸 FS detected new upload: ${filename}`);
+    console.log(`📥 Waiting for file stability before conversion...`);
 
     processingQueue.push({
       filePath,
       options: {},
       dbRetries: 5
     });
+    console.log(`📦 Queued for conversion: ${filename}`);
+
     processQueue();
   });
-
   watcher.on("unlink", (filePath) => {
     if (!VIDEO_EXT.test(filePath)) return;
     removeOldHls(path.parse(filePath).name);
