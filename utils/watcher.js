@@ -165,8 +165,8 @@ async function processQueue() {
 
   while (processingQueue.length > 0) {
     const task = processingQueue.shift();
-
-    // Wait for DB record if not present
+    const filename = path.basename(task.filePath);
+    if (processedSet.has(filename)) continue;
     let dbTarget = task.options.dbTarget || null;
     if (!dbTarget && task.dbRetries) {
       const rec = await waitForDbRecord(task.filePath, task.dbRetries);
@@ -188,15 +188,14 @@ function startFsWatcher() {
     persistent: true,
     depth: 10,
     ignoreInitial: true, 
-    awaitWriteFinish: {
-      stabilityThreshold: 5000,
-      pollInterval: 1000
-    }
   });
 
   watcher.on("add", async (filePath) => {
     if (!VIDEO_EXT.test(filePath)) return;
     const filename = path.basename(filePath);
+    if (processedSet.has(filename) || processingQueue.some(t => t.filePath === filePath)) {
+      return;
+    }
 
     console.log(`📸 FS detected new upload: ${filename}`);
 
@@ -205,6 +204,7 @@ function startFsWatcher() {
       options: {},
       dbRetries: 5
     });
+
     processQueue();
   });
 
@@ -219,6 +219,7 @@ function startFsWatcher() {
 
   console.log("👀 FS watcher started");
 }
+
 // --------------------
 // DB Watcher (for updates / renamed files)
 // --------------------
