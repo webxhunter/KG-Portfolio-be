@@ -235,22 +235,29 @@ function startFsWatcher() {
     }
   });
 
-  watcher.on("add", async (filePath) => {
-    if (!VIDEO_EXT.test(filePath)) return;
-    const filename = path.basename(filePath);
+watcher.on("add", async (filePath) => {
+  if (!VIDEO_EXT.test(filePath)) return;
+  const filename = path.basename(filePath);
 
-    console.log(`📸 FS detected new upload: ${filename}`);
-    console.log(`📥 Waiting for file stability before conversion...`);
+  const dbPath = typeof getDbPathForFile === "function" 
+                 ? await getDbPathForFile(filename) 
+                 : null;
+  const filenameWithoutExt = path.parse(filename).name;
 
-    processingQueue.push({
-      filePath,
-      options: {},
-      dbRetries: 5
-    });
-    console.log(`📦 Queued for conversion: ${filename}`);
+  // ✅ Skip if DB already has correct HLS
+  if (dbPath && dbPath.includes(filenameWithoutExt)) {
+    console.log(`ℹ️ Skipping ${filename} — DB already has latest HLS, no conversion needed`);
+    return;
+  }
 
-    processQueue();
+  processingQueue.push({
+    filePath,
+    options: {},
+    dbRetries: 5
   });
+  console.log(`📦 Queued for conversion: ${filename}`);
+  processQueue();
+});
 
   watcher.on("unlink", (filePath) => {
     if (!VIDEO_EXT.test(filePath)) return;
