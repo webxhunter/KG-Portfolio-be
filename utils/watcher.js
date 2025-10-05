@@ -153,13 +153,24 @@ function startFsWatcher() {
   const watcher = chokidar.watch(UPLOADS_DIR, { ignored: /(^|[\/\\])\../, persistent: true, depth: 2, ignoreInitial: true });
 
   watcher.on("add", async filePath => {
-    if (!VIDEO_EXT.test(filePath)) return;
+  if (!VIDEO_EXT.test(filePath)) return;
 
-    const rec = await findDbRecordForFilename(path.basename(filePath));
-    if (!rec) return;
-    await processSingleFile(filePath, { dbTarget: { table: rec.table, id: rec.id }, isUpdate: false });
-  });
+  const filename = path.basename(filePath);
+  let rec = null;
+  for (let i = 0; i < 5; i++) {
+    rec = await findDbRecordForFilename(filename);
+    if (rec) break;
+    await new Promise(r => setTimeout(r, 1000)); 
+  }
 
+  if (!rec) {
+    console.log(`⚠️ No DB record yet for ${filename}, skipping.`);
+    return;
+  }
+
+  console.log(`📸 FS detected new upload: ${filename}`);
+  await processSingleFile(filePath, { dbTarget: { table: rec.table, id: rec.id }, isUpdate: false });
+});
   watcher.on("unlink", filePath => {
     if (!VIDEO_EXT.test(filePath)) return;
     removeOldHls(path.parse(filePath).name);
