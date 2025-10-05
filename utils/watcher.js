@@ -18,7 +18,7 @@ let processedSet = new Set();
 const processingQueue = [];
 let isProcessing = false;
 let isScanning = false;
-const activeConversionSet = new Set();
+const activeConversionSet = new Set(); 
 
 // --------------------
 // Load / Save processed set
@@ -31,6 +31,7 @@ function loadProcessedSet() {
     return new Set();
   }
 }
+
 function saveProcessedSet() {
   try {
     fs.writeFileSync(PROCESSED_JSON, JSON.stringify([...processedSet], null, 2));
@@ -38,6 +39,7 @@ function saveProcessedSet() {
     console.error("⚠️ Failed to save processedVideos.json:", err.message || err);
   }
 }
+
 processedSet = loadProcessedSet();
 
 // --------------------
@@ -65,12 +67,14 @@ async function findDbRecordForFilename(filename) {
       const table = Object.values(t)[0];
       const [cols] = await pool.query(`SHOW COLUMNS FROM \`${table}\``);
       if (!cols.some(c => c.Field === "video_hls_path")) continue;
+
       const videoCols = cols.filter(c => /video/i.test(c.Field));
       for (const vc of videoCols) {
         const [rows] = await pool.query(
           `SELECT id, \`${vc.Field}\` AS video_path, video_hls_path FROM \`${table}\` WHERE \`${vc.Field}\` LIKE ? LIMIT 1`,
           [`%${filename}%`]
         );
+
         if (rows.length)
           return {
             table,
@@ -102,43 +106,58 @@ async function updateDbRecordHls(table, id, hlsPath) {
 async function waitForDbRecord(filePath, retries = 5) {
   const filename = path.basename(filePath);
   let rec = null;
+
   for (let i = 0; i < retries; i++) {
     rec = await findDbRecordForFilename(filename);
     if (rec) return rec;
     await new Promise(r => setTimeout(r, 1000));
   }
+
   return null;
 }
 
 // --------------------
 async function processSingleFile(filePath, options = {}) {
   const filename = path.basename(filePath);
-  const baseName = path.parse(filePath).name;
-  const filenameWithoutExt = path.parse(filename).name;
+  const baseName = path.parse(filename).name;
   const outputDir = path.join(HLS_DIR, baseName);
 
   try {
     const stable = await waitUntilStableAdaptive(filePath);
     if (!stable) return;
+
     const valid = await isValidVideo(filePath);
     if (!valid) return;
 
-    if (options.isUpdate) {
-      if (!processedSet.has(filename)) {
-        console.log(`ℹ️ Update detected for ${filename}, removing old HLS folder`);
-        removeOldHls(baseName);
-        processedSet.delete(filename);
-        saveProcessedSet();
-      }
+    if (options.isUpdate && !processedSet.has(filename)) {
+      console.log(`ℹ️ Update detected for ${filename}, removing old HLS folder`);
+      removeOldHls(baseName);
+      processedSet.delete(filename);
+      saveProcessedSet();
     }
 
     fs.mkdirSync(outputDir, { recursive: true });
     console.log(`🎬 Starting HLS conversion for: ${filename} ...`);
     await convertToHls(filePath, outputDir, baseName);
-    const hlsRelative = `/hls/${baseName}.m3u8`;
+
+    const hlsRelative = `hls/${baseName}.m3u8`;
 
     if (options.dbTarget) {
+      console.log(`📝 Updating DB for ${filename} ...`);
       await updateDbRecordHls(options.dbTarget.table, options.dbTarget.id, hlsRelative);
+
+      // ⏳ Wait and verify the update against the DB
+      await new Promise(res => setTimeout(res, 1000));
+      const [rows] = await pool.query(
+        `SELECT video_hls_path FROM \`${options.dbTarget.table}\` WHERE id = ? LIMIT 1`,
+        [options.dbTarget.id]
+      );
+
+      if (rows.length && (rows[0].video_hls_path === hlsRelative || rows[0].video_hls_path === `/${hlsRelative}`)) {
+        console.log(`✅ Verified DB updated correctly for ${filename}`);
+      } else {
+        console.log(`⚠️ DB still not matching for ${filename}, will check again next scan.`);
+      }
     }
 
     processedSet.add(filename);
@@ -153,14 +172,17 @@ async function processSingleFile(filePath, options = {}) {
 async function processQueue() {
   if (isProcessing) return;
   isProcessing = true;
+
   while (processingQueue.length > 0) {
     const task = processingQueue.shift();
     const filename = path.basename(task.filePath);
     let dbTarget = task.options.dbTarget || null;
+
     if (!dbTarget && task.dbRetries) {
       const rec = await waitForDbRecord(task.filePath, task.dbRetries);
       if (rec) dbTarget = { table: rec.table, id: rec.id };
     }
+
     try {
       await processSingleFile(task.filePath, { ...task.options, dbTarget });
     } catch (error) {
@@ -169,6 +191,7 @@ async function processQueue() {
       activeConversionSet.delete(filename);
     }
   }
+
   isProcessing = false;
 }
 
@@ -189,9 +212,8 @@ function startFsWatcher() {
 
   watcher.on("add", async (filePath) => {
     if (!VIDEO_EXT.test(filePath)) return;
-    const filename = path.basename(filePath);
 
-    // ✅ Safety check + add
+    const filename = path.basename(filePath);
     if (activeConversionSet.has(filename)) return;
     activeConversionSet.add(filename);
 
@@ -203,8 +225,9 @@ function startFsWatcher() {
 
   watcher.on("unlink", (filePath) => {
     if (!VIDEO_EXT.test(filePath)) return;
+
     const filename = path.basename(filePath);
-    removeOldHls(path.parse(filePath).name);
+    removeOldHls(path.parse(filename).name);
     processedSet.delete(filename);
     activeConversionSet.delete(filename);
     saveProcessedSet();
@@ -216,41 +239,53 @@ function startFsWatcher() {
 // --------------------
 // DB Watcher
 // --------------------
+const MAX_CONCURRENT_QUEUE_SIZE = 5;
+
 async function scanDbForUpdates() {
   if (isScanning) return;
   isScanning = true;
+
   try {
     const [tables] = await pool.query("SHOW TABLES");
     for (const t of tables) {
       const table = Object.values(t)[0];
       const [cols] = await pool.query(`SHOW COLUMNS FROM \`${table}\``);
       if (!cols.some(c => c.Field === "video_hls_path")) continue;
-      const videoCols = cols.filter(c => /video/i.test(c.Field));
 
+      const videoCols = cols.filter(c => /video/i.test(c.Field));
       for (const vc of videoCols) {
         const [rows] = await pool.query(`
           SELECT id, \`${vc.Field}\` AS video_path, video_hls_path
           FROM \`${table}\`
           WHERE video_hls_path IS NOT NULL
-            AND video_hls_path <> CONCAT('/hls/', SUBSTRING_INDEX(SUBSTRING_INDEX(\`${vc.Field}\`, '/', -1), '.', 1), '.m3u8')
+            AND SUBSTRING_INDEX(SUBSTRING_INDEX(video_hls_path, '/', -1), '.', 1)
+            <> SUBSTRING_INDEX(SUBSTRING_INDEX(\`${vc.Field}\`, '/', -1), '.', 1)
           LIMIT 50
         `);
 
         for (const rec of rows) {
           if (!rec.video_path || !VIDEO_EXT.test(rec.video_path)) continue;
+
           const filename = path.basename(rec.video_path);
 
-          // ✅ Safety check + add
-          if (activeConversionSet.has(filename)) continue;
-          activeConversionSet.add(filename);
+          if (activeConversionSet.size >= MAX_CONCURRENT_QUEUE_SIZE) {
+            console.log(`⚠️ DB scan deferred: Active queue size (${activeConversionSet.size}) reached limit (${MAX_CONCURRENT_QUEUE_SIZE}).`);
+            return;
+          }
 
-          const filePath = findFileByNameInsensitive(path.basename(rec.video_path), UPLOADS_DIR);
+          if (activeConversionSet.has(filename)) continue;
+
+          const filePath = findFileByNameInsensitive(filename, UPLOADS_DIR);
           if (!filePath) continue;
+
+          activeConversionSet.add(filename);
           console.log(`🔄 DB-triggered UPDATE: ${filename}`);
+
           processingQueue.push({
             filePath,
             options: { dbTarget: { table, id: rec.id }, isUpdate: true }
           });
+
           processQueue();
         }
       }
