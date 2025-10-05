@@ -18,7 +18,7 @@ let processedMap = new Map();
 const processingQueue = [];
 let isProcessing = false;
 let isScanning = false;
-const currentlyProcessingSet = new Set(); // starts empty on restart
+const currentlyProcessingSet = new Set();
 
 // --------------------
 // Load / Save processed map
@@ -44,7 +44,7 @@ function saveProcessedMap() {
 processedMap = loadProcessedMap();
 
 // --------------------
-// Remove old HLS folder
+// Remove old HLS folder (only when actual update)
 // --------------------
 function removeOldHls(baseName) {
   const dir = path.join(HLS_DIR, baseName);
@@ -144,14 +144,14 @@ async function processSingleFile(filePath, options = {}) {
     const stats = fs.statSync(filePath);
     const prev = processedMap.get(filenameLower);
 
-    if (prev && prev.size === stats.size && prev.timestamp === stats.mtimeMs) {
-      console.log(`ℹ️ Skipping ${filename} — already processed and DB up-to-date`);
+    const isRealUpdate = prev ? (prev.size !== stats.size || prev.timestamp !== stats.mtimeMs) : true;
+
+    if (!isRealUpdate) {
+      console.log(`ℹ️ Skipping ${filename} — already processed and unchanged`);
       return;
     }
 
-    if (options.isUpdate && prev && prev.size === stats.size) {
-      console.log(`ℹ️ Update detected for ${filename} but already processed, skipping old HLS removal`);
-    } else if (options.isUpdate) {
+    if (options.isUpdate && prev) {
       console.log(`ℹ️ Update detected for ${filename}, removing old HLS folder`);
       removeOldHls(baseName);
       processedMap.delete(filenameLower);
@@ -213,7 +213,7 @@ function startFsWatcher() {
     ignored: /(^|[\/\\])\../,
     persistent: true,
     depth: 10,
-    ignoreInitial: true,
+    ignoreInitial: true, // ✅ ignore all existing files on startup
     awaitWriteFinish: { stabilityThreshold: 5000, pollInterval: 1000 }
   });
 
@@ -229,7 +229,6 @@ function startFsWatcher() {
 
   watcher.on("unlink", (filePath) => {
     if (!VIDEO_EXT.test(filePath)) return;
-    removeOldHls(path.parse(filePath).name);
     const filenameLower = path.basename(filePath).toLowerCase();
     processedMap.delete(filenameLower);
     saveProcessedMap();
@@ -261,7 +260,6 @@ async function scanDbForUpdates() {
           SELECT id, \`${vc.Field}\` AS video_path, video_hls_path
           FROM \`${table}\`
           WHERE video_hls_path IS NOT NULL
-            AND video_hls_path <> CONCAT('/hls/', SUBSTRING_INDEX(SUBSTRING_INDEX(\`${vc.Field}\`, '/', -1), '.', 1), '.m3u8')
           LIMIT 50
         `);
 
@@ -272,14 +270,13 @@ async function scanDbForUpdates() {
           const filenameLower = fileName.toLowerCase();
 
           if (currentlyProcessingSet.has(filenameLower) || processingQueue.some(t => t.filePath && path.basename(t.filePath).toLowerCase() === filenameLower)) {
-            console.log(`⏳ Skipping DB queue for ${fileName} — already processing or queued`);
             continue;
           }
 
           const filePath = findFileByNameInsensitive(fileName, UPLOADS_DIR);
           if (!filePath) continue;
 
-          console.log(`🔄 DB-triggered UPDATE (filename mismatch): ${fileName}`);
+          // Only mark as update if size/mtime is different
           processingQueue.push({
             filePath,
             options: { dbTarget: { table, id: rec.id }, isUpdate: true }
