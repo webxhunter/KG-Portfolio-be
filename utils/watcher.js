@@ -14,33 +14,33 @@ const UPLOADS_DIR = path.join(PROJECT_ROOT, "public/uploads");
 const HLS_DIR = path.join(PROJECT_ROOT, "public/hls");
 const PROCESSED_JSON = path.join(PROJECT_ROOT, "processedVideos.json");
 
-let processedSet = new Set();
+let processedMap = new Map(); 
 const processingQueue = [];
 let isProcessing = false;
 let isScanning = false;
 
 // --------------------
-// Load / Save processed set
+// Load / Save processed map
 // --------------------
-function loadProcessedSet() {
+function loadProcessedMap() {
   try {
-    if (!fs.existsSync(PROCESSED_JSON)) return new Set();
-    // normalize to lowercase
-    return new Set(JSON.parse(fs.readFileSync(PROCESSED_JSON, "utf-8")).map(f => f.toLowerCase()));
+    if (!fs.existsSync(PROCESSED_JSON)) return new Map();
+    const obj = JSON.parse(fs.readFileSync(PROCESSED_JSON, "utf-8"));
+    return new Map(Object.entries(obj));
   } catch {
-    return new Set();
+    return new Map();
   }
 }
 
-function saveProcessedSet() {
+function saveProcessedMap() {
   try {
-    fs.writeFileSync(PROCESSED_JSON, JSON.stringify([...processedSet], null, 2));
+    fs.writeFileSync(PROCESSED_JSON, JSON.stringify(Object.fromEntries(processedMap), null, 2));
   } catch (err) {
     console.error("⚠️ Failed to save processedVideos.json:", err.message || err);
   }
 }
 
-processedSet = loadProcessedSet();
+processedMap = loadProcessedMap();
 
 // --------------------
 // Remove old HLS folder
@@ -129,6 +129,7 @@ async function processSingleFile(filePath, options = {}) {
   const filename = path.basename(filePath);
   const baseName = path.parse(filePath).name;
   const filenameWithoutExt = path.parse(filename).name;
+  const filenameLower = filename.toLowerCase();
   const outputDir = path.join(HLS_DIR, baseName);
 
   try {
@@ -138,22 +139,23 @@ async function processSingleFile(filePath, options = {}) {
     const valid = await isValidVideo(filePath);
     if (!valid) return;
 
-    if (!options.isUpdate && typeof getDbPathForFile === "function") {
-      const dbPath = await getDbPathForFile(filename);
-      if (dbPath && dbPath.includes(filenameWithoutExt)) {
-        console.log(`✅ Skipping ${filename} — DB already matches latest HLS`);
-        return;
-      }
+    const stats = fs.statSync(filePath);
+    const prev = processedMap.get(filenameLower);
+
+    if (prev && prev.size === stats.size && prev.timestamp === stats.mtimeMs) {
+      console.log(`ℹ️ Skipping ${filename} — already processed and DB up-to-date`);
+      return;
     }
 
     let shouldConvert = true;
 
+    // For updates
     if (options.isUpdate) {
-      if (!processedSet.has(filename.toLowerCase())) {
+      if (!prev || prev.size !== stats.size) {
         console.log(`ℹ️ Update detected for ${filename}, removing old HLS folder`);
         removeOldHls(baseName);
-        processedSet.delete(filename.toLowerCase());
-        saveProcessedSet();
+        processedMap.delete(filenameLower);
+        saveProcessedMap();
       } else {
         console.log(`ℹ️ Update detected for ${filename} but already processed, skipping old HLS removal`);
         shouldConvert = false;
@@ -184,8 +186,10 @@ async function processSingleFile(filePath, options = {}) {
       }
     }
 
-    processedSet.add(filename.toLowerCase());
-    saveProcessedSet();
+    // Save processedMap with current size and timestamp
+    processedMap.set(filenameLower, { size: stats.size, timestamp: stats.mtimeMs });
+    saveProcessedMap();
+
     console.log(`🎬 Conversion completed successfully: ${filename}`);
     console.log(`🏁 Done: ${filename} → HLS created & DB updated`);
   } catch (err) {
@@ -194,7 +198,7 @@ async function processSingleFile(filePath, options = {}) {
 }
 
 // --------------------
-// Queue processor (1 file at a time with DB retry)
+// Queue processor
 // --------------------
 async function processQueue() {
   if (isProcessing) return;
@@ -216,7 +220,7 @@ async function processQueue() {
 }
 
 // --------------------
-// FS Watcher (PM2-safe)
+// FS Watcher
 // --------------------
 function startFsWatcher() {
   if (global.fsWatcherStarted) return;
@@ -233,21 +237,6 @@ function startFsWatcher() {
   watcher.on("add", async (filePath) => {
     if (!VIDEO_EXT.test(filePath)) return;
     const filename = path.basename(filePath);
-
-    const dbPath = typeof getDbPathForFile === "function"
-      ? await getDbPathForFile(filename)
-      : null;
-    const filenameWithoutExt = path.parse(filename).name;
-
-    if (dbPath && dbPath.includes(filenameWithoutExt)) {
-      console.log(`ℹ️ Skipping ${filename} — DB already has latest HLS, no conversion needed`);
-      return;
-    }
-
-    const normFileName = filename.toLowerCase();
-    processedSet.add(normFileName); 
-    saveProcessedSet();
-
     processingQueue.push({ filePath, options: {}, dbRetries: 5 });
     console.log(`📦 Queued for conversion: ${filename}`);
     processQueue();
@@ -256,17 +245,17 @@ function startFsWatcher() {
   watcher.on("unlink", (filePath) => {
     if (!VIDEO_EXT.test(filePath)) return;
     removeOldHls(path.parse(filePath).name);
-    const filename = path.basename(filePath);
-    processedSet.delete(filename.toLowerCase());
-    saveProcessedSet();
-    console.log(`🗑️ File deleted: ${filename}`);
+    const filenameLower = path.basename(filePath).toLowerCase();
+    processedMap.delete(filenameLower);
+    saveProcessedMap();
+    console.log(`🗑️ File deleted: ${filePath}`);
   });
 
   console.log("👀 FS watcher started");
 }
 
 // --------------------
-// DB Watcher (for updates / renamed files)
+// DB Watcher
 // --------------------
 async function scanDbForUpdates() {
   if (isScanning) return;
@@ -281,6 +270,7 @@ async function scanDbForUpdates() {
       if (!cols.some(c => c.Field === "video_hls_path")) continue;
 
       const videoCols = cols.filter(c => /video/i.test(c.Field));
+
       for (const vc of videoCols) {
         const [rows] = await pool.query(`
           SELECT id, \`${vc.Field}\` AS video_path, video_hls_path
@@ -299,24 +289,22 @@ async function scanDbForUpdates() {
           const filePath = findFileByNameInsensitive(fileName, UPLOADS_DIR);
           if (!filePath) continue;
 
-          const normFileName = fileName.toLowerCase();
-          if (processedSet.has(normFileName) && currentHlsBase?.toLowerCase() === originalBase.toLowerCase()) {
+          const filenameLower = fileName.toLowerCase();
+          const stats = fs.existsSync(filePath) ? fs.statSync(filePath) : null;
+          const prev = processedMap.get(filenameLower);
+          if (prev && currentHlsBase === originalBase && prev.size === stats?.size) {
             console.log(`ℹ️ Skipping ${fileName} — already processed and DB up-to-date`);
             continue;
           }
-          if (!processedSet.has(normFileName) || (currentHlsBase && originalBase.toLowerCase() !== currentHlsBase.toLowerCase())) {
-            console.log(`🔄 DB-triggered UPDATE (filename mismatch): ${fileName}`);
-            processedSet.add(normFileName); 
-            processingQueue.push({
-              filePath,
-              options: { dbTarget: { table, id: rec.id }, isUpdate: true }
-            });
-          }
+          console.log(`🔄 DB-triggered UPDATE (filename mismatch): ${fileName}`);
+          processingQueue.push({
+            filePath,
+            options: { dbTarget: { table, id: rec.id }, isUpdate: true }
+          });
+          processQueue();
         }
       }
     }
-
-    if (processingQueue.length > 0) processQueue(); 
   } catch (err) {
     console.error("⚠️ DB scan error:", err.message || err);
   } finally {
@@ -325,7 +313,7 @@ async function scanDbForUpdates() {
 }
 
 // --------------------
-// Start watcher
+// Start everything
 // --------------------
 console.log("👀 Starting watcher (FS + DB)...");
 console.log("📂 Uploads:", UPLOADS_DIR);
