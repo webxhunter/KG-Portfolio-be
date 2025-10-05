@@ -127,21 +127,23 @@ async function waitForDbRecord(filePath, retries = 5) {
 async function processSingleFile(filePath, options = {}) {
   const filename = path.basename(filePath);
   const baseName = path.parse(filePath).name;
+  const filenameWithoutExt = path.parse(filename).name;
   const outputDir = path.join(HLS_DIR, baseName);
 
   try {
-    const stable = await waitUntilStable(filePath);
+    const stable = await waitUntilStableAdaptive(filePath);
     if (!stable) return;
 
     const valid = await isValidVideo(filePath);
     if (!valid) return;
 
-    // ✅ Skip if DB already has correct HLS entry
-    const dbPath = await getDbPathForFile(filename);
-    const filenameWithoutExt = path.parse(filename).name;
-    if (dbPath && dbPath.includes(filenameWithoutExt)) {
-      console.log(`✅ Skipping ${filename} — DB already matches latest HLS`);
-      return;
+    // ✅ Skip DB check for new uploads if DB already has latest HLS
+    if (!options.isUpdate && typeof getDbPathForFile === "function") {
+      const dbPath = await getDbPathForFile(filename);
+      if (dbPath && dbPath.includes(filenameWithoutExt)) {
+        console.log(`✅ Skipping ${filename} — DB already matches latest HLS`);
+        return;
+      }
     }
 
     if (options.isUpdate) {
@@ -156,6 +158,7 @@ async function processSingleFile(filePath, options = {}) {
 
     const hlsRelative = `/hls/${baseName}.m3u8`;
 
+    // Update DB only for updates
     if (options.dbTarget) {
       console.log(`📝 Updating DB for ${filename} ...`);
       await updateDbRecordHls(options.dbTarget.table, options.dbTarget.id, hlsRelative);
