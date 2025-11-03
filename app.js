@@ -20,22 +20,21 @@ import photographyGalleryRoutes from './routes/photographygalleryRoutes.js';
 dotenv.config();
 
 const app = express();
-// ✅ Allow only 3000 and 4000 for CORS
+
 const allowedOrigins = process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',') : [];
+app.use(cors({
+  origin: function(origin, callback) {
+    if (!origin || allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
+  credentials: true,
+  methods: ['GET','POST','PUT','DELETE','OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+}));
 
-
-app.use(
-  cors({
-    origin: function (origin, callback) {
-      if (!origin || allowedOrigins.includes(origin)) {
-        callback(null, true);
-      } else {
-        callback(new Error('Not allowed by CORS'));
-      }
-    },
-    credentials: true, // if you want to allow cookies/authorization headers
-  })
-);
 app.use(express.json());
 
 app.use('/uploads', express.static(path.join(process.cwd(), 'public/uploads')));
