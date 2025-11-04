@@ -11,24 +11,19 @@ const convertToHls = (inputPath, outputDir, outputName) => {
       fs.mkdirSync(absOutputDir, { recursive: true });
     }
 
+    // ✅ Updated FFmpeg command (5s chunks, 720p + 1080p only)
     const command = `
-      ffmpeg -y -threads 1 -i "${inputPath}" -preset fast \
-      -filter:v:0 "scale=w=640:h=360:force_original_aspect_ratio=decrease,pad=ceil(iw/2)*2:ceil(ih/2)*2" \
-      -c:a aac -ar 48000 -b:a:0 96k -c:v:0 h264 -profile:v:0 main -crf 20 \
-      -g 48 -keyint_min 48 -sc_threshold 0 -b:v:0 800k -maxrate:v:0 856k \
-      -bufsize:v:0 1200k -hls_time 10 -hls_playlist_type vod \
-      -hls_segment_filename "${absOutputDir}/${outputName}_360p_%03d.ts" \
-      "${absOutputDir}/${outputName}_360p.m3u8" \
-      -filter:v:1 "scale=w=1280:h=720:force_original_aspect_ratio=decrease,pad=ceil(iw/2)*2:ceil(ih/2)*2" \
-      -c:a aac -ar 48000 -b:a:1 128k -c:v:1 h264 -profile:v:1 main -crf 20 \
-      -g 48 -keyint_min 48 -sc_threshold 0 -b:v:1 2800k -maxrate:v:1 2996k \
-      -bufsize:v:1 4200k -hls_time 10 -hls_playlist_type vod \
+      ffmpeg -y -threads 1 -i "${inputPath}" -preset veryfast -movflags +faststart \
+      -filter:v:0 "scale=w=1280:h=720:force_original_aspect_ratio=decrease,pad=ceil(iw/2)*2:ceil(ih/2)*2" \
+      -c:a aac -ar 48000 -b:a:0 128k -c:v:0 h264 -profile:v:0 main -crf 23 \
+      -g 48 -keyint_min 48 -sc_threshold 0 -b:v:0 2500k -maxrate:v:0 2800k -bufsize:v:0 4200k \
+      -hls_time 5 -hls_playlist_type vod -hls_flags independent_segments \
       -hls_segment_filename "${absOutputDir}/${outputName}_720p_%03d.ts" \
       "${absOutputDir}/${outputName}_720p.m3u8" \
-      -filter:v:2 "scale=w=1920:h=1080:force_original_aspect_ratio=decrease,pad=ceil(iw/2)*2:ceil(ih/2)*2" \
-      -c:a aac -ar 48000 -b:a:2 192k -c:v:2 h264 -profile:v:2 high -crf 20 \
-      -g 48 -keyint_min 48 -sc_threshold 0 -b:v:2 5000k -maxrate:v:2 5350k \
-      -bufsize:v:2 7500k -hls_time 10 -hls_playlist_type vod \
+      -filter:v:1 "scale=w=1920:h=1080:force_original_aspect_ratio=decrease,pad=ceil(iw/2)*2:ceil(ih/2)*2" \
+      -c:a aac -ar 48000 -b:a:1 192k -c:v:1 h264 -profile:v:1 high -crf 23 \
+      -g 48 -keyint_min 48 -sc_threshold 0 -b:v:1 4500k -maxrate:v:1 5000k -bufsize:v:1 6000k \
+      -hls_time 5 -hls_playlist_type vod -hls_flags independent_segments \
       -hls_segment_filename "${absOutputDir}/${outputName}_1080p_%03d.ts" \
       "${absOutputDir}/${outputName}_1080p.m3u8"
     `;
@@ -39,9 +34,9 @@ const convertToHls = (inputPath, outputDir, outputName) => {
         return reject(new Error(stderr));
       }
 
+      // ✅ Create master playlist for adaptive streaming
       const masterPlaylist = `#EXTM3U
-#EXT-X-STREAM-INF:BANDWIDTH=800000,RESOLUTION=640x360
-${outputName}_360p.m3u8
+#EXT-X-VERSION:3
 #EXT-X-STREAM-INF:BANDWIDTH=2800000,RESOLUTION=1280x720
 ${outputName}_720p.m3u8
 #EXT-X-STREAM-INF:BANDWIDTH=5000000,RESOLUTION=1920x1080

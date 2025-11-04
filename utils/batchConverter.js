@@ -1,3 +1,5 @@
+import "./logger.js";
+
 import db from "../db.js";
 import fs from "fs";
 import path from "path";
@@ -7,6 +9,7 @@ import convertToHls from "./hlsconvert.js";
 const HLS_DIR = path.join(process.cwd(), "public/hls");
 const UPLOADS_DIR = path.join(process.cwd(), "public/uploads");
 const VIDEO_EXT = /\.(mp4|mov|avi|mkv|webm)$/i;
+const PROCESSED_FILE = path.join(process.cwd(), "utils/processed.json");
 
 // 🕒 Timestamped log
 function log(message) {
@@ -46,7 +49,7 @@ function validateHls(outputDir, resolution = null) {
   }
 }
 
-// Check if HLS exists for a given resolution
+// ✅ Check if HLS exists for a given resolution
 function hlsExists(outputDir, resolution = null) {
   const playlistName = resolution
     ? `${path.basename(outputDir)}_${resolution}p.m3u8`
@@ -54,6 +57,39 @@ function hlsExists(outputDir, resolution = null) {
   return fs.existsSync(path.join(outputDir, playlistName));
 }
 
+// ✅ Load & Save processed checkpoint
+function loadProcessedSet() {
+  try {
+    if (!fs.existsSync(PROCESSED_FILE)) return new Set();
+    const data = JSON.parse(fs.readFileSync(PROCESSED_FILE, "utf-8"));
+    return new Set(data.processed || []);
+  } catch {
+    return new Set();
+  }
+}
+
+function saveProcessedSet(set) {
+  try {
+    fs.writeFileSync(
+      PROCESSED_FILE,
+      JSON.stringify({ processed: [...set] }, null, 2)
+    );
+  } catch (err) {
+    log(`⚠️ Failed to save processed.json: ${err.message}`);
+  }
+}
+
+const processedSet = loadProcessedSet();
+
+// 🧹 Auto-cleanup for failed or incomplete conversions
+function cleanupIncomplete(outputDir) {
+  if (fs.existsSync(outputDir)) {
+    fs.rmSync(outputDir, { recursive: true, force: true });
+    log(`🧹 Cleaned up incomplete folder: ${outputDir}`);
+  }
+}
+
+// -------------------- MAIN CONVERSION --------------------
 async function processRow(table, row, column) {
   try {
     const dbPath = row[column];
@@ -63,9 +99,17 @@ async function processRow(table, row, column) {
     const baseName = path.parse(fileName).name;
     const outputDir = path.join(HLS_DIR, baseName);
 
+    // ✅ Skip if already processed
+    if (processedSet.has(baseName)) {
+      log(`⏭️ Already processed → skipping: ${baseName}`);
+      return;
+    }
+
     // ✅ Skip only if HLS exists & valid
     if (row.video_hls_path && validateHls(outputDir)) {
       log(`✅ Valid HLS found → skipping: ${dbPath}`);
+      processedSet.add(baseName);
+      saveProcessedSet(processedSet);
       return;
     }
 
@@ -79,7 +123,7 @@ async function processRow(table, row, column) {
       }
     }
 
-    const resolutions = ["360", "720", "1080"];
+    const resolutions = ["720", "1080"];
     let allValid = true;
 
     for (const res of resolutions) {
@@ -87,7 +131,13 @@ async function processRow(table, row, column) {
         log(`ℹ️ Found valid ${res}p HLS → skipping: ${fileName}`);
       } else {
         log(`⚠️ Missing/incomplete ${res}p HLS → converting: ${fileName}`);
-        await convertToHls(inputPath, outputDir, baseName, res);
+        try {
+          await convertToHls(inputPath, outputDir, baseName, res);
+        } catch (err) {
+          log(`❌ FFmpeg failed for ${res}p: ${err.message}`);
+          cleanupIncomplete(outputDir); 
+          allValid = false;
+        }
       }
 
       if (!validateHls(outputDir, res)) allValid = false;
@@ -100,6 +150,8 @@ async function processRow(table, row, column) {
         [hlsRelativePath, row.id]
       );
       log(`✅ Completed HLS & updated DB: ${fileName}`);
+      processedSet.add(baseName);
+      saveProcessedSet(processedSet);
     } else {
       log(`⚠️ HLS incomplete for some resolutions: ${fileName}`);
     }
@@ -107,9 +159,11 @@ async function processRow(table, row, column) {
     await new Promise(r => setTimeout(r, 2000));
   } catch (err) {
     log(`❌ Conversion failed for ${table}.${row.id}: ${err.message}`);
+    cleanupIncomplete(path.join(HLS_DIR, path.parse(row[column]).name)); 
   }
 }
 
+// -------------------- MAIN LOOP --------------------
 async function batchConvert() {
   try {
     const [tables] = await db.query("SHOW TABLES");

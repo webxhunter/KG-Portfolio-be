@@ -1,3 +1,5 @@
+import "./logger.js";
+
 import dotenv from "dotenv";
 dotenv.config();
 
@@ -18,7 +20,7 @@ let processedSet = new Set();
 const processingQueue = [];
 let isProcessing = false;
 let isScanning = false;
-const activeConversionSet = new Set(); 
+const activeConversionSet = new Set();
 
 // --------------------
 // Load / Save processed set
@@ -48,6 +50,14 @@ function removeOldHls(baseName) {
   if (fs.existsSync(dir)) {
     fs.rmSync(dir, { recursive: true, force: true });
     console.log(`🗑️ Removed old HLS folder: ${dir}`);
+  }
+}
+
+// 🧹 Auto-cleanup for failed/incomplete conversions
+function cleanupIncomplete(outputDir) {
+  if (fs.existsSync(outputDir)) {
+    fs.rmSync(outputDir, { recursive: true, force: true });
+    console.log(`🧹 Cleaned up incomplete folder: ${outputDir}`);
   }
 }
 
@@ -164,7 +174,8 @@ async function processSingleFile(filePath, options = {}) {
     saveProcessedSet();
     console.log(`🏁 Done: ${filename} → HLS created & DB updated`);
   } catch (err) {
-    console.error("❌ processSingleFile error:", err.message || err);
+    console.error(`❌ processSingleFile error for ${filename}:`, err.message || err);
+    cleanupIncomplete(outputDir); // 🧹 Added → deletes partial folder on fail
   }
 }
 
@@ -301,3 +312,4 @@ async function scanDbForUpdates() {
 console.log("👀 Starting watcher (FS + DB)...");
 startFsWatcher();
 setInterval(scanDbForUpdates, 2000);
+
