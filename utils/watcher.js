@@ -270,7 +270,8 @@ async function scanDbForUpdates() {
       const [cols] = await pool.query(`SHOW COLUMNS FROM \`${table}\``);
       if (!cols.some(c => c.Field === "video_hls_path")) continue;
 
-      const videoCols = cols.filter(c => /video/i.test(c.Field));
+      // Search columns whose name contains 'video', 'image', 'file', or 'url' (case-insensitive)
+      const videoCols = cols.filter(c => /video|image|file|url/i.test(c.Field));
       for (const vc of videoCols) {
         const [rows] = await pool.query(`
           SELECT id, \`${vc.Field}\` AS video_path, video_hls_path
