@@ -180,7 +180,7 @@ async function processSingleFile(filePath, options = {}) {
     console.log(`🏁 Done: ${filename} → HLS created & DB updated`);
   } catch (err) {
     console.error(`❌ processSingleFile error for ${filename}:`, err.message || err);
-    cleanupIncomplete(outputDir); // 🧹 Added → deletes partial folder on fail
+    cleanupIncomplete(outputDir); 
   }
 }
 
