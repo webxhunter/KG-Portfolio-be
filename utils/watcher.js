@@ -3,6 +3,8 @@ import "./logger.js";
 import dotenv from "dotenv";
 dotenv.config();
 
+console.log("🚀 WATCHER SCRIPT LOADED: VERSION 1.1 - DB DEBUG ENABLED");
+
 import chokidar from "chokidar";
 import fs from "fs";
 import path from "path";
@@ -78,8 +80,12 @@ async function findDbRecordForFilename(filename) {
       const [cols] = await pool.query(`SHOW COLUMNS FROM \`${table}\``);
       if (!cols.some(c => c.Field === "video_hls_path")) continue;
 
-      const videoCols = cols.filter(c => /video/i.test(c.Field));
+      // Around Line 118
+      const videoCols = cols.filter(c => /video|image|file|url/i.test(c.Field));
       for (const vc of videoCols) {
+          const searchPattern = `%${filename}%`;
+          console.log(`🔍 SEARCHING ${table}.${vc.Field} for: ${searchPattern}`);
+
         const [rows] = await pool.query(
           `SELECT id, \`${vc.Field}\` AS video_path, video_hls_path FROM \`${table}\` WHERE \`${vc.Field}\` LIKE ? LIMIT 1`,
           [`%${filename}%`]
