@@ -106,6 +106,7 @@ async function findDbRecordForFilename(filename) {
 async function updateDbRecordHls(table, id, hlsPath) {
   try {
     await pool.query(`UPDATE \`${table}\` SET video_hls_path = ? WHERE id = ?`, [hlsPath, id]);
+    console.log("🔥 SQL: UPDATE successful for", table, id);
     console.log(`💾 DB updated: ${table} id=${id} → ${hlsPath}`);
   } catch (err) {
     console.error(`⚠️ Failed to update DB (${table} id=${id}):`, err.message || err);
@@ -119,7 +120,10 @@ async function waitForDbRecord(filePath, retries = 5) {
 
   for (let i = 0; i < retries; i++) {
     rec = await findDbRecordForFilename(filename);
-    if (rec) return rec;
+    if (rec) {
+      console.log("✅ DB RECORD FOUND! Table:", rec.table, "ID:", rec.id);
+      return rec;
+    }
     await new Promise(r => setTimeout(r, 1000));
   }
 
@@ -153,6 +157,7 @@ async function processSingleFile(filePath, options = {}) {
     const hlsRelative = `hls/${baseName}.m3u8`;
 
     if (options.dbTarget) {
+      console.log(`🔄 ATTEMPTING DB UPDATE for ID: ${options.dbTarget.id}`);
       console.log(`📝 Updating DB for ${filename} ...`);
       await updateDbRecordHls(options.dbTarget.table, options.dbTarget.id, hlsRelative);
 
@@ -190,6 +195,7 @@ async function processQueue() {
     let dbTarget = task.options.dbTarget || null;
 
     if (!dbTarget && task.dbRetries) {
+      console.log("⏳ Starting DB record wait for:", filename, "Retries:", task.dbRetries);
       const rec = await waitForDbRecord(task.filePath, task.dbRetries);
       if (rec) dbTarget = { table: rec.table, id: rec.id };
     }
@@ -229,7 +235,8 @@ function startFsWatcher() {
     activeConversionSet.add(filename);
 
     console.log(`📸 FS detected new upload: ${filename}`);
-    processingQueue.push({ filePath, options: {}, dbRetries: 5 });
+    console.log("➡️ FILENAME SENT TO WAIT FOR DB:", filename);
+    processingQueue.push({ filePath, options: {}, dbRetries: 20 });
     console.log(`📦 Queued for conversion: ${filename}`);
     processQueue();
   });
@@ -311,5 +318,5 @@ async function scanDbForUpdates() {
 // --------------------
 console.log("👀 Starting watcher (FS + DB)...");
 startFsWatcher();
-setInterval(scanDbForUpdates, 2000);
+setInterval(scanDbForUpdates, 5000);
 
