@@ -172,6 +172,8 @@ async function processSingleFile(filePath, options = {}) {
         console.log(`✅ Verified DB updated correctly for ${filename}`);
       } else {
         console.log(`⚠️ DB still not matching for ${filename}, will check again next scan.`);
+        console.log(`🚨 DEBUG: Expected HLS: ${hlsRelative}`);
+        console.log(`🚨 DEBUG: Actual DB Value: ${rows.length ? rows[0].video_hls_path : 'No Row Found'}`);
       }
     }
 
