@@ -319,5 +319,5 @@ async function scanDbForUpdates() {
 // --------------------
 console.log("👀 Starting watcher (FS + DB)...");
 startFsWatcher();
-setInterval(scanDbForUpdates, 5000); //5 seconds 
+setInterval(scanDbForUpdates, 5000); 
 
