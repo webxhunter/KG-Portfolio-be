@@ -24,13 +24,19 @@ const storage = multer.diskStorage({
   }
 });
 
-const upload = multer({ storage });
+const upload = multer({
+  storage,
+  fileFilter: (req, file, cb) => {
+    if (file.mimetype.startsWith('image')) cb(null, true);
+    else cb(new Error('Only images allowed'), false);
+  }
+});
 
 // Route to add or update a video in the main 'cinematography_videos' table
-router.post('/upload', upload.single('video'), upsertCinematographyVideo);
+router.post('/upload', upload.single('image'), upsertCinematographyVideo);
 
 // Route to add a new video to the 'cinematography_gallery_video' table
-router.post('/add', upload.single('video'), addCinematographyVideo);
+router.post('/add', upload.single('image'), addCinematographyVideo);
 
 // Route to get all videos from the main 'cinematography_videos' table
 router.get('/', getAllCinematographyVideos);
@@ -39,10 +45,9 @@ router.get('/', getAllCinematographyVideos);
 router.get('/gallery', getAllGalleryCinematographyVideos);
 
 // Route to update a specific video in the 'cinematography_gallery_video' table by its ID
-router.put('/gallery/:id', upload.single('video'), updateCinematographyGalleryVideo);
+router.put('/gallery/:id', upload.single('image'), updateCinematographyGalleryVideo);
 
 // Route to delete a specific video from the 'cinematography_gallery_video' table by its ID
 router.delete('/gallery/:id', deleteCinematographyGalleryVideo);
 
 export default router;
-

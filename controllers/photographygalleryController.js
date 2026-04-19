@@ -1,111 +1,83 @@
 import pool from '../db.js';
 import path from 'path';
+import fs from 'fs';
 
-// GET all photography gallery images
+// GET ALL
 export const getAllPhotographyGallery = async (req, res) => {
   try {
     const [rows] = await pool.query('SELECT * FROM photography_gallery ORDER BY id ASC');
 
-    const formattedRows = rows.map(row => ({
-      id: row.id,
-      category: row.category,
-      image_url: row.image_url.replace(/^\/uploads\//, ''), 
-      location: row.location,
-      video_hls_path: row.video_hls_path 
-  ? `hls/${path.basename(row.video_hls_path, '.m3u8')}/${path.basename(row.video_hls_path)}`
-  : null,
-      created_at: row.created_at,
-      updated_at: row.updated_at
-    }));
-
-    res.json(formattedRows);
+    res.json(rows);
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
 };
 
-// GET single photography gallery image by ID
+// GET ONE
 export const getPhotographyGalleryById = async (req, res) => {
-  const { id } = req.params;
   try {
-    const [rows] = await pool.query('SELECT * FROM photography_gallery WHERE id = ?', [id]);
-    if (!rows.length) return res.status(404).json({ message: 'Image not found' });
-
-    const row = rows[0];
-    res.json({
-      id: row.id,
-      category: row.category,
-      image_url: row.image_url.replace(/^\/uploads\//, ''), 
-      location: row.location,
-      video_hls_path: row.video_hls_path 
-  ? `hls/${path.basename(row.video_hls_path, '.m3u8')}/${path.basename(row.video_hls_path)}`
-  : null,
-      created_at: row.created_at,
-      updated_at: row.updated_at
-    });
-  } catch (err) {
-    res.status(500).json({ message: err.message });
-  }
-};
-
-// UPLOAD new photography image
-export const uploadPhotographyGallery = async (req, res) => {
-  if (!req.file) return res.status(400).json({ message: 'No file uploaded' });
-
-  try {
-    console.log(req)
-    const { category, location } = req.body;
-    if (!category || !location) return res.status(400).json({ message: 'Category and location are required' });
-
-    const imageUrl = req.file.filename; 
-    await pool.query(
-      'INSERT INTO photography_gallery (category, image_url, location) VALUES (?, ?, ?)',
-      [category, imageUrl, location]
+    const [rows] = await pool.query(
+      'SELECT * FROM photography_gallery WHERE id=?',
+      [req.params.id]
     );
-    res.json({ message: 'Photography image uploaded successfully' });
+
+    res.json(rows[0] || null);
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
 };
 
-// UPDATE photography image by ID
+// UPLOAD
+export const uploadPhotographyGallery = async (req, res) => {
+  if (!req.file) return res.status(400).json({ message: 'No file' });
+
+  const { category, location } = req.body;
+
+  await pool.query(
+    'INSERT INTO photography_gallery (category, image_url, location) VALUES (?, ?, ?)',
+    [category, req.file.filename, location]
+  );
+
+  res.json({ message: 'Uploaded' });
+};
+
+// UPDATE
 export const updatePhotographyGallery = async (req, res) => {
   const { id } = req.params;
 
-  try {
-    // Check if record exists first
-    const [rows] = await pool.query('SELECT * FROM photography_gallery WHERE id = ?', [id]);
-    if (!rows.length) return res.status(404).json({ message: 'Image not found' });
+  const [rows] = await pool.query(
+    'SELECT * FROM photography_gallery WHERE id=?',
+    [id]
+  );
 
-    // Check if file uploaded
-    if (!req.file) return res.status(400).json({ message: 'No file uploaded' });
+  if (!rows.length) return res.status(404).json({ message: 'Not found' });
 
-    const { category, location } = req.body;
-    if (!category || !location)
-      return res.status(400).json({ message: 'Category and location are required' });
-
-    const imageUrl = req.file.filename; 
-    await pool.query(
-      'UPDATE photography_gallery SET category = ?, image_url = ?, location = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
-      [category, imageUrl, location, id]
-    );
-
-    res.json({ message: 'Photography gallery updated successfully' });
-  } catch (err) {
-    res.status(500).json({ message: err.message });
+  if (rows[0].image_url) {
+    const oldPath = path.join(process.cwd(), 'public/uploads', rows[0].image_url);
+    if (fs.existsSync(oldPath)) fs.unlinkSync(oldPath);
   }
+
+  await pool.query(
+    'UPDATE photography_gallery SET category=?, image_url=?, location=? WHERE id=?',
+    [req.body.category, req.file.filename, req.body.location, id]
+  );
+
+  res.json({ message: 'Updated' });
 };
 
-// DELETE photography image by ID
+// DELETE
 export const deletePhotographyGallery = async (req, res) => {
-  const { id } = req.params;
-  try {
-    const [rows] = await pool.query('SELECT * FROM photography_gallery WHERE id = ?', [id]);
-    if (!rows.length) return res.status(404).json({ message: 'Image not found' });
+  const [rows] = await pool.query(
+    'SELECT * FROM photography_gallery WHERE id=?',
+    [req.params.id]
+  );
 
-    await pool.query('DELETE FROM photography_gallery WHERE id = ?', [id]);
-    res.json({ message: 'Photography image deleted successfully' });
-  } catch (err) {
-    res.status(500).json({ message: err.message });
-  }
+  if (rows.length && rows[0].image_url) {
+    const filePath = path.join(process.cwd(), 'public/uploads', rows[0].image_url);
+    if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+  }
+
+  await pool.query('DELETE FROM photography_gallery WHERE id=?', [req.params.id]);
+
+  res.json({ message: 'Deleted' });
 };

@@ -10,13 +10,19 @@ const storage = multer.diskStorage({
     cb(null, 'public/uploads/');
   },
   filename: function (req, file, cb) {
-    const uniqueSuffix = Date.now();
-    cb(null, 'client-video-' + uniqueSuffix + path.extname(file.originalname));
+    cb(null, 'client-image-' + Date.now() + path.extname(file.originalname));
   }
 });
-const upload = multer({ storage });
+
+const upload = multer({
+  storage,
+  fileFilter: (req, file, cb) => {
+    if (file.mimetype.startsWith('image')) cb(null, true);
+    else cb(new Error('Only images allowed'), false);
+  }
+});
 
 router.get('/', getClientVideo);
-router.post('/', upload.single('video'), uploadClientVideo);
+router.post('/', upload.single('image'), uploadClientVideo);
 
 export default router; 

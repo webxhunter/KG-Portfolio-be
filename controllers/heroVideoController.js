@@ -1,47 +1,93 @@
+// import path from 'path';
+// import fs from 'fs';
+// import pool from '../db.js';
+
+// // GET: Get current hero video (only one)
+// export const getHeroVideo = async (req, res) => {
+//   try {
+//     const [rows] = await pool.query('SELECT * FROM hero_video ORDER BY id DESC LIMIT 1');
+//     if (rows.length === 0) return res.json(null);
+
+//     const row = rows[0];
+
+//     const hlsPath = row.video_hls_path && row.video_hls_path.endsWith('.m3u8')
+//       ? `hls/${path.basename(row.video_hls_path, '.m3u8')}/${path.basename(row.video_hls_path)}`
+//       : null;
+
+//     res.json({
+//       ...row,
+//       video_hls_path: hlsPath
+//     });
+//   } catch (err) {
+//     res.status(500).json({ error: 'Failed to fetch hero video' });
+//   }
+// };
+
+// // POST: Upload or update hero video (file + description)
+// export const uploadHeroVideo = async (req, res) => {
+//   const description = req.body.description;
+//   const file = req.file;
+//   if (!file) return res.status(400).json({ error: 'No video file uploaded' });
+
+//   try {
+//     // Remove old video if exists
+//     const [rows] = await pool.query('SELECT * FROM hero_video ORDER BY id DESC LIMIT 1');
+//     if (rows.length > 0) {
+//       const oldPath = path.join(process.cwd(), 'public', rows[0].video_path);
+//       if (fs.existsSync(oldPath)) fs.unlinkSync(oldPath);
+//       await pool.query('DELETE FROM hero_video');
+//     }
+//     // Save new video
+//     const videoPath = `/uploads/${file.filename}`;
+//     await pool.query('INSERT INTO hero_video (video_path, description) VALUES (?, ?)', [videoPath, description]);
+//     res.json({ message: 'Hero video updated', videoPath, description });
+//   } catch (err) {
+//     res.status(500).json({ error: 'Failed to upload hero video' });
+//   }
+// }; 
+
 import path from 'path';
 import fs from 'fs';
 import pool from '../db.js';
 
-// GET: Get current hero video (only one)
+// GET
 export const getHeroVideo = async (req, res) => {
   try {
-    const [rows] = await pool.query('SELECT * FROM hero_video ORDER BY id DESC LIMIT 1');
-    if (rows.length === 0) return res.json(null);
+    const [rows] = await pool.query(
+      'SELECT * FROM hero_video ORDER BY id DESC LIMIT 1'
+    );
 
-    const row = rows[0];
-
-    const hlsPath = row.video_hls_path && row.video_hls_path.endsWith('.m3u8')
-      ? `hls/${path.basename(row.video_hls_path, '.m3u8')}/${path.basename(row.video_hls_path)}`
-      : null;
-
-    res.json({
-      ...row,
-      video_hls_path: hlsPath
-    });
+    res.json(rows[0] || null);
   } catch (err) {
-    res.status(500).json({ error: 'Failed to fetch hero video' });
+    res.status(500).json({ error: err.message });
   }
 };
 
-// POST: Upload or update hero video (file + description)
+// POST
 export const uploadHeroVideo = async (req, res) => {
-  const description = req.body.description;
-  const file = req.file;
-  if (!file) return res.status(400).json({ error: 'No video file uploaded' });
+  if (!req.file) return res.status(400).json({ error: 'No image uploaded' });
 
   try {
-    // Remove old video if exists
-    const [rows] = await pool.query('SELECT * FROM hero_video ORDER BY id DESC LIMIT 1');
-    if (rows.length > 0) {
-      const oldPath = path.join(process.cwd(), 'public', rows[0].video_path);
+    const [rows] = await pool.query(
+      'SELECT * FROM hero_video ORDER BY id DESC LIMIT 1'
+    );
+
+    if (rows.length && rows[0].image_url) {
+      const oldPath = path.join(process.cwd(), 'public', rows[0].image_url);
       if (fs.existsSync(oldPath)) fs.unlinkSync(oldPath);
       await pool.query('DELETE FROM hero_video');
     }
-    // Save new video
-    const videoPath = `/uploads/${file.filename}`;
-    await pool.query('INSERT INTO hero_video (video_path, description) VALUES (?, ?)', [videoPath, description]);
-    res.json({ message: 'Hero video updated', videoPath, description });
+
+    const imagePath = `/uploads/${req.file.filename}`;
+
+    await pool.query(
+      'INSERT INTO hero_video (image_url, description) VALUES (?, ?)',
+      [imagePath, req.body.description]
+    );
+
+    res.json({ message: 'Hero updated', imagePath });
+
   } catch (err) {
-    res.status(500).json({ error: 'Failed to upload hero video' });
+    res.status(500).json({ error: err.message });
   }
-}; 
+};
